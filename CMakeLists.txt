@@ -12,3 +12,4 @@ if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
 endif()
 
 add_subdirectory(tools)
+add_subdirectory(nvme.device)
