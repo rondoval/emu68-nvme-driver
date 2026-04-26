@@ -269,6 +269,8 @@ static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
         n = next;
     }
 
+    nvme_close_libraries(base);
+
     ULONG segList = base->segList;
 
     Forbid();
@@ -296,7 +298,6 @@ static ULONG closeLib(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm
 
     if (base->device.dd_Library.lib_OpenCnt == 0)
     {
-        nvme_close_libraries(base);
         if (base->device.dd_Library.lib_Flags & LIBF_DELEXP)
             return expungeLib(base);
     }
