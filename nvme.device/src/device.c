@@ -43,8 +43,21 @@ static const char deviceIdString[] = DEVICE_IDSTRING;
 /*
  * Forward declarations needed before _doInit and the Resident struct.
  */
+static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"));
 APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *_SysBase asm("a6"));
 static const APTR funcTable[];
+
+static struct Resident const nvmeDeviceResident __attribute__((used,no_reorder)) = {
+    RTC_MATCHWORD,
+    (struct Resident *)&nvmeDeviceResident,
+    (APTR)&endOfCode,
+    RTF_COLDSTART, /* no RTF_AUTOINIT — _doInit handles MakeLibrary */
+    DEVICE_VERSION,
+    NT_DEVICE,
+    DEVICE_PRIORITY,
+    (APTR)&deviceName,
+    (APTR)&deviceIdString,
+    (APTR)_doInit};
 
 /*
  * _doInit - manual Resident init, called directly by exec.
@@ -57,8 +70,7 @@ static const APTR funcTable[];
  * needs to call OpenDevice("nvme.device", …) on itself, so AddDevice MUST
  * happen before MountDrive.  Manual init gives us that ordering.
  */
-static struct Library *__attribute__((used))
-_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"))
+static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"))
 {
     (void)SysBase;
     /* MakeLibrary macro uses old-style '()' function pointer — suppress the warning */
@@ -92,18 +104,6 @@ _doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"))
 
     return (struct Library *)base;
 }
-
-static struct Resident const nvmeDeviceResident __attribute__((used)) = {
-    RTC_MATCHWORD,
-    (struct Resident *)&nvmeDeviceResident,
-    (APTR)&endOfCode,
-    RTF_AFTERDOS, /* no RTF_AUTOINIT — _doInit handles MakeLibrary */
-    DEVICE_VERSION,
-    NT_DEVICE,
-    DEVICE_PRIORITY,
-    (APTR)&deviceName,
-    (APTR)&deviceIdString,
-    (APTR)_doInit};
 
 static void nvme_close_libraries(struct NVMeDevice *base)
 {
@@ -159,7 +159,13 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
     (void)_SysBase;
     Kprintf("[nvme] %s: initializing device\n", __func__);
     base->segList = segList;
+    base->device.dd_Library.lib_IdString = (APTR)deviceIdString;
+    base->device.dd_Library.lib_Version = DEVICE_VERSION;
     base->device.dd_Library.lib_Revision = DEVICE_REVISION;
+    base->device.dd_Library.lib_Node.ln_Type = NT_DEVICE;
+    base->device.dd_Library.lib_Node.ln_Name = (APTR)deviceName;
+    base->device.dd_Library.lib_Flags = LIBF_SUMUSED | LIBF_CHANGED;
+
     _NewMinList(&base->controllers);
     _NewMinList(&base->units);
     base->probed = FALSE;
@@ -183,14 +189,6 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
                     ULONG flags asm("d1"), struct NVMeDevice *base asm("a6"))
 {
     Kprintf("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
-
-    if (io->io_Message.mn_Length < sizeof(struct IOStdReq))
-    {
-        Kprintf("[nvme] %s: request too short (%lu)\n", __func__,
-                (ULONG)io->io_Message.mn_Length);
-        io->io_Error = IOERR_OPENFAIL;
-        return;
-    }
 
     /* Probe once: enumerate all NVMe controllers and build the unit list */
     if (!base->probed)
