@@ -55,9 +55,12 @@ static const UWORD SupportedCommands[] = {
 static void do_nscmd_devicequery(struct IOStdReq *io)
 {
     struct NSDeviceQueryResult *dq = (struct NSDeviceQueryResult *)io->io_Data;
+    KprintfH("[nvme] NSCMD_DEVICEQUERY: io_Length=%lu\n", io->io_Length);
 
     if (io->io_Length < (ULONG)sizeof(struct NSDeviceQueryResult))
     {
+        KprintfH("[nvme] NSCMD_DEVICEQUERY: buffer too small (need %lu)\n",
+                 (ULONG)sizeof(struct NSDeviceQueryResult));
         io->io_Error = IOERR_BADLENGTH;
         return;
     }
@@ -78,10 +81,13 @@ static void do_nscmd_devicequery(struct IOStdReq *io)
 static void do_td_getgeometry(struct IOStdReq *io, struct NVMeUnit *unit)
 {
     struct DriveGeometry *dg = (struct DriveGeometry *)io->io_Data;
+    KprintfH("[nvme] TD_GETGEOMETRY: unit %ld io_Length=%lu\n", unit->unitNumber, io->io_Length);
 
     if (io->io_Length < (ULONG)sizeof(struct DriveGeometry))
     {
         io->io_Error = IOERR_BADLENGTH;
+        KprintfH("[nvme] TD_GETGEOMETRY: buffer too small (need %lu)\n",
+                 (ULONG)sizeof(struct DriveGeometry));
         return;
     }
 
@@ -111,6 +117,8 @@ static void do_td_getgeometry(struct IOStdReq *io, struct NVMeUnit *unit)
 
     io->io_Actual = sizeof(struct DriveGeometry);
     io->io_Error = 0;
+    KprintfH("[nvme] TD_GETGEOMETRY: blockSize=%lu logicalSectors=%lu totalSectors=%lu\n",
+             unit->blockSize, (ULONG)unit->logicalSectors, totalSectors);
 }
 
 /*
@@ -129,6 +137,8 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
     /* io_Actual is NOT cleared here: 64-bit commands (TD_READ64, NSCMD_TD_READ64, …)
      * pass the high 32 bits of the byte offset in io_Actual before calling BeginIO.
      * ProcessCommand saves it before doing anything else. */
+    KprintfH("[nvme] beginIO: cmd=0x%04lx unit=%ld io_Length=%lu io_Actual=%lu\n",
+             (ULONG)io->io_Command, unit->unitNumber, io->io_Length, io->io_Actual);
 
     switch (io->io_Command)
     {
@@ -172,11 +182,15 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
 
     if (queue)
     {
+        KprintfH("[nvme] beginIO: queuing command 0x%04lx to unit %ld\n",
+                 (ULONG)io->io_Command, unit->unitNumber);
         io->io_Flags &= (UBYTE)~IOF_QUICK;
         PutMsg(&unit->ctrl->msgPort, (struct Message *)io);
     }
     else
     {
+        KprintfH("[nvme] beginIO: completed command 0x%04lx for unit %ld — io_Error=%ld io_Actual=%lu\n",
+                 (ULONG)io->io_Command, unit->unitNumber, io->io_Error, io->io_Actual);
         /* Synchronous completion — reply if the caller is not WaitIO()ing */
         if (!(io->io_Flags & IOF_QUICK))
             ReplyMsg((struct Message *)io);

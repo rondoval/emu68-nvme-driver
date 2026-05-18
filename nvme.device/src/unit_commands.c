@@ -24,6 +24,9 @@
  */
 static inline void reply_io(struct IOStdReq *io, BYTE error)
 {
+    KprintfH("[nvme] reply_io: cmd=0x%04lx unit=%ld error=%ld io_Actual=%lu\n",
+             (ULONG)io->io_Command, ((struct NVMeUnit *)io->io_Unit)->unitNumber,
+             error, io->io_Actual);
     io->io_Error = error;
     ReplyMsg((struct Message *)io);
 }
@@ -43,6 +46,8 @@ static inline u64 decode_lba(ULONG io_actual, ULONG io_offset, UWORD blockShift)
 {
     ULONG hi = io_actual >> blockShift;
     ULONG lo = (io_actual << (32u - blockShift)) | (io_offset >> blockShift);
+    KprintfH("[nvme] decode_lba: io_actual=0x%08lx io_offset=0x%08lx blockShift=%u => lba=0x%08lx%08lx\n",
+             io_actual, io_offset, blockShift, hi, lo);
     return ((u64)hi << 32) | lo;
 }
 
@@ -51,12 +56,13 @@ static inline u64 decode_lba(ULONG io_actual, ULONG io_offset, UWORD blockShift)
  *
  * Called from the unit task's message-drain loop.  Synchronous commands
  * (device control) are replied immediately.  Data transfer commands are
- * dispatched to nvme_read/nvme_write stubs; Phase 2 replaces the stubs
- * with real NVMe I/O queue submission.
+ * dispatched via nvme_submit_io(); Phase 2 wires that into the real SQ ring.
  */
 void ProcessCommand(struct IOStdReq *io)
 {
     struct NVMeUnit *unit = (struct NVMeUnit *)io->io_Unit;
+    KprintfH("[nvme] ProcessCommand: cmd=0x%04lx unit=%ld io_Length=%lu io_Actual=%lu\n",
+             (ULONG)io->io_Command, unit->unitNumber, io->io_Length, io->io_Actual);
 
     /*
      * Save the high 32 bits of the byte offset BEFORE zeroing io_Actual.
@@ -129,11 +135,15 @@ void ProcessCommand(struct IOStdReq *io)
 
         if (blockCount == 0)
         {
+            KprintfH("[nvme] %s: blockCount is zero (io_Length=%lu blockShift=%u)\n",
+                     __func__, io->io_Length, unit->blockShift);
             reply_io(io, IOERR_BADLENGTH);
             break;
         }
         if (unit->logicalSectors > 0 && lba + blockCount > unit->logicalSectors)
         {
+            KprintfH("[nvme] %s: LBA out of range (lba=0x%08lx%08lx blockCount=%lu logicalSectors=%lu)\n",
+                     __func__, (ULONG)(lba >> 32), (ULONG)lba, blockCount, (ULONG)unit->logicalSectors);
             reply_io(io, IOERR_BADADDRESS);
             break;
         }

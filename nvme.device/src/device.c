@@ -193,6 +193,7 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
     /* Probe once: enumerate all NVMe controllers and build the unit list */
     if (!base->probed)
     {
+        Kprintf("[nvme] %s: first open, probing for controllers\n", __func__);
         if (nvme_open_libraries(base) != ERR_NO_ERROR)
         {
             Kprintf("[nvme] %s: failed to open support libraries\n", __func__);
@@ -224,6 +225,7 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
         io->io_Error = IOERR_OPENFAIL;
         return;
     }
+    KprintfH("[nvme] %s: found unit %ld, opening\n", __func__, unitNumber);
 
     s32 result = UnitOpen(unit, unitNumber, (LONG)flags);
 

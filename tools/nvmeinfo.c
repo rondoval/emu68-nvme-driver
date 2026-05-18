@@ -248,7 +248,7 @@ static void feature_summary(ULONG cap_lo, ULONG cap_hi, ULONG cc, ULONG csts)
 /* ------------------------------------------------------------------ */
 /* Per-device register dump                                            */
 /* ------------------------------------------------------------------ */
-static void dump_nvme_regs(UBYTE *bar0)
+static void dump_nvme_regs(volatile UBYTE *bar0)
 {
     ULONG cap_lo = mmio_read32(bar0 + NVME_REG_CAP_LO);
     ULONG cap_hi = mmio_read32(bar0 + NVME_REG_CAP_HI);

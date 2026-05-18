@@ -114,9 +114,13 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
     Kprintf("[nvme] %s: unit %ld nsid %lu flags=0x%lx\n", __func__, unitNumber, unit->nsid, flags);
 
     struct NVMeController *ctrl = unit->ctrl;
+    KprintfH("[nvme] %s: controller PCI dev %04lx:%04lx openUnits=%lu address=%lx\n", __func__,
+             (ULONG)ctrl->pci_dev->vendor, (ULONG)ctrl->pci_dev->device, ctrl->openUnits, (ULONG)ctrl);
 
     if (unit->unit.unit_OpenCnt > 0)
     {
+        Kprintf("[nvme] %s: unit %ld already open (openCnt=%lu), incrementing\n", __func__,
+                unitNumber, (ULONG)unit->unit.unit_OpenCnt);
         unit->unit.unit_OpenCnt++;
         ctrl->openUnits++;
         return ERR_NO_ERROR;
@@ -128,6 +132,7 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
     // TODO controller semaphore?
     if (ctrl->openUnits == 0)
     {
+        KprintfH("[nvme] %s: first open of any namespace on controller, initializing hardware\n", __func__);
         error = nvme_ctrl_hw_init(ctrl);
         if (error != ERR_NO_ERROR)
             return error;
