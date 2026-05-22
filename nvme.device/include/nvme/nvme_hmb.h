@@ -17,7 +17,7 @@ struct NVMeController;
  *   controller (Set Features bits=0) and releases all allocated
  *   chunks plus the descriptor table.
  */
-int  nvme_setup_host_mem(struct NVMeController *ctrl);
+void nvme_setup_host_mem(struct NVMeController *ctrl);
 void nvme_free_host_mem(struct NVMeController *ctrl);
 
 #endif /* NVME_HMB_H */
