@@ -54,7 +54,7 @@ add_executable(nvme.device
 target_include_directories(nvme.device
     PRIVATE
         include
-        ${CMAKE_CURRENT_SOURCE_DIR}
+        mounter
 )
 
 target_link_libraries(nvme.device

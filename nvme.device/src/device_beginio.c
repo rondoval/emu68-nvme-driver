@@ -144,8 +144,6 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
     {
     case TD_MOTOR: /* NVMe drives have no spindle motor; always report success */
     case ETD_MOTOR:
-    case CMD_UPDATE: /* No explicit cache flush */
-    case ETD_UPDATE:
     case CMD_CLEAR: /* No explicit cache update */
     case ETD_CLEAR:
     case TD_CHANGENUM: /* Fixed media: no media changes */
