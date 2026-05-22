@@ -21,9 +21,9 @@
 #include <minlist.h>
 #include <debug.h>
 
-#include "../include/device.h"
-#include "../include/config.h"
-#include "mounter/mounter.h"
+#include <device.h>
+#include <config.h>
+#include <mounter.h>
 
 /*
  * Placed first so that accidentally running the device as a program
@@ -253,23 +253,7 @@ static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
         return 0;
     }
 
-    /* Free all probe-allocated units */
-    struct MinNode *n = base->units.mlh_Head;
-    while (n->mln_Succ != NULL)
-    {
-        struct MinNode *next = n->mln_Succ;
-        FreeMem(n, sizeof(struct NVMeUnit));
-        n = next;
-    }
-
-    /* Free all probe-allocated controllers */
-    n = base->controllers.mlh_Head;
-    while (n->mln_Succ != NULL)
-    {
-        struct MinNode *next = n->mln_Succ;
-        FreeMem(n, sizeof(struct NVMeController));
-        n = next;
-    }
+    nvme_unprobe_all(base);
 
     nvme_close_libraries(base);
 

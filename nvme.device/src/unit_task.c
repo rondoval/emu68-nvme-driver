@@ -13,21 +13,9 @@
 #include <minlist.h>
 #include <debug.h>
 
-#include "../include/device.h"
-#include "../include/config.h"
-
-/*
- * nvme_process_completions - Phase 2 stub.
- *
- * In Phase 2 this will drain the I/O completion queue, match each CQE
- * to its pending IOStdReq via the command ID, set io_Error / io_Actual,
- * and call ReplyMsg().
- */
-void nvme_process_completions(struct NVMeController *ctrl)
-{
-    (void)ctrl;
-    /* Phase 2: walk CQ ring, advance CQ head doorbell, reply completed requests */
-}
+#include <device.h>
+#include <config.h>
+#include <nvme/nvme.h>          /* nvme_scan_work, nvme_fw_act_work_amiga */
 
 /*
  * UnitTask - per-controller task body.
@@ -117,7 +105,7 @@ static void UnitTask(struct NVMeController *ctrl, struct Task *parent)
             if (CheckIO(&timerReq->tr_node))
                 WaitIO(&timerReq->tr_node);
 
-            /* Phase 2: walk pending command list, abort timed-out requests */
+            nvme_tick_watchdog(ctrl);
 
             timerReq->tr_node.io_Command = TR_ADDREQUEST;
             timerReq->tr_time.tv_secs = 0;

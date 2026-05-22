@@ -15,9 +15,11 @@
 #include <debug.h>
 #include <memory.h>
 
-#include "../include/device.h"
-#include "../include/nvme/nvme_scsi.h"
-#include "../include/nvme/nvme_io.h"
+#include <device.h>
+#include <nvme/nvme_scsi.h>
+#include <nvme/nvme_io.h>
+#include <nvme/nvme.h>       /* struct nvme_command, nvme_submit_sync_cmd */
+#include <nvme/nvme_linux.h> /* nvme_admin_abort_cmd, struct nvme_command body */
 
 /*
  * reply_io - set error code and reply an IOStdReq.
@@ -46,8 +48,8 @@ static inline u64 decode_lba(ULONG io_actual, ULONG io_offset, UWORD blockShift)
 {
     ULONG hi = io_actual >> blockShift;
     ULONG lo = (io_actual << (32u - blockShift)) | (io_offset >> blockShift);
-    KprintfH("[nvme] decode_lba: io_actual=0x%08lx io_offset=0x%08lx blockShift=%u => lba=0x%08lx%08lx\n",
-             io_actual, io_offset, blockShift, hi, lo);
+    KprintfH("[nvme] decode_lba: io_actual=0x%08lx io_offset=0x%08lx blockShift=%lu => lba=0x%08lx%08lx\n",
+             io_actual, io_offset, (ULONG)blockShift, hi, lo);
     return ((u64)hi << 32) | lo;
 }
 
@@ -55,14 +57,13 @@ static inline u64 decode_lba(ULONG io_actual, ULONG io_offset, UWORD blockShift)
  * ProcessCommand - dispatch an IOStdReq received by the unit task.
  *
  * Called from the unit task's message-drain loop.  Synchronous commands
- * (device control) are replied immediately.  Data transfer commands are
- * dispatched via nvme_submit_io(); Phase 2 wires that into the real SQ ring.
+ * (device control) are replied immediately.  Data-transfer commands are
+ * dispatched via nvme_io_submit_*(), which builds the SQE and rings the
+ * doorbell — async completion drives reply_io from the CQE path.
  */
 void ProcessCommand(struct IOStdReq *io)
 {
     struct NVMeUnit *unit = (struct NVMeUnit *)io->io_Unit;
-    KprintfH("[nvme] ProcessCommand: cmd=0x%04lx unit=%ld io_Length=%lu io_Actual=%lu\n",
-             (ULONG)io->io_Command, unit->unitNumber, io->io_Length, io->io_Actual);
 
     /*
      * Save the high 32 bits of the byte offset BEFORE zeroing io_Actual.
@@ -124,19 +125,13 @@ void ProcessCommand(struct IOStdReq *io)
     case NSCMD_TD_FORMAT64:
     case NSCMD_ETD_FORMAT64:
     {
-        /*
-         * Decode the 64-bit LBA from the byte offset fields.
-         * high_offset contains io_Actual as set by the caller (high 32 bits
-         * for 64-bit commands, 0 for 32-bit commands set by beginIO).
-         * io_Offset is the low 32 bits of the byte offset.
-         */
         u64 lba = decode_lba(high_offset, (ULONG)io->io_Offset, (UWORD)unit->blockShift);
         ULONG blockCount = (ULONG)io->io_Length >> unit->blockShift;
 
         if (blockCount == 0)
         {
-            KprintfH("[nvme] %s: blockCount is zero (io_Length=%lu blockShift=%u)\n",
-                     __func__, io->io_Length, unit->blockShift);
+            KprintfH("[nvme] %s: blockCount is zero (io_Length=%lu blockShift=%lu)\n",
+                     __func__, (ULONG)io->io_Length, (ULONG)unit->blockShift);
             reply_io(io, IOERR_BADLENGTH);
             break;
         }
@@ -148,29 +143,41 @@ void ProcessCommand(struct IOStdReq *io)
             break;
         }
 
-        BYTE error = (direction == READ)
-                         ? nvme_read(io->io_Data, lba, blockCount, unit)
-                         : nvme_write(io->io_Data, lba, blockCount, unit);
+        BYTE error = nvme_io_submit_rw(unit, io, lba, blockCount,
+                                       direction == READ ? nvme_cmd_read : nvme_cmd_write,
+                                       io->io_Data);
+        if (error != NVME_IO_ASYNC)
+            reply_io(io, error);
+        break;
+    }
 
-        if (error == ERR_NO_ERROR)
-            io->io_Actual = io->io_Length;
-
-        reply_io(io, error);
+    case CMD_UPDATE:
+    case ETD_UPDATE:
+    {
+        /* AmigaOS "flush dirty buffers" -> NVMe Flush (opcode 0x00).
+         * Commits the controller's Volatile Write Cache so HDToolBox's
+         * RDB writes survive reboot. */
+        BYTE error = nvme_io_submit_flush(unit, io);
+        if (error != NVME_IO_ASYNC)
+            reply_io(io, error);
         break;
     }
 
     case HD_SCSICMD:
-        reply_io(io, nvme_handle_scsi_cmd(io));
+    {
+        BYTE scsi_err = nvme_handle_scsi_cmd(io);
+        if (scsi_err != NVME_IO_ASYNC)
+            reply_io(io, scsi_err);
         break;
+    }
 
     case CMD_INTERNAL_ABORT_REQUEST:
-        /* Pool-allocated by device_abortio.c; free it here.
-         * Phase 2 will cancel the target request in the NVMe command ring. */
-        KprintfH("[nvme] %s: internal abort (unit %ld)\n", __func__, unit->unitNumber);
-        if (unit->ctrl && unit->ctrl->memoryPool)
-            pool_free(unit->ctrl->memoryPool, io);
+
+        if (ctrl && ctrl->memoryPool)
+            pool_free(ctrl->memoryPool, io);
         /* Do NOT ReplyMsg — this is an internal request, not a caller request */
         break;
+    }
 
     default:
         Kprintf("[nvme] %s: unknown command 0x%04lx (unit %ld)\n", __func__,

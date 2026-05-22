@@ -46,6 +46,7 @@ add_executable(nvme.device
     src/nvme/nvme_probe.c
     src/nvme/nvme_scsi.c
     src/nvme/nvme_io.c
+    src/nvme/nvme_constants.c
     mounter/mounter.c
     mounter/mounter_string.c
     src/device_end.c
