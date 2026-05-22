@@ -16,7 +16,6 @@
 #include <memory.h>
 
 #include <device.h>
-#include <nvme/nvme_scsi.h>
 #include <nvme/nvme_io.h>
 #include <nvme/nvme.h>       /* struct nvme_command, nvme_submit_sync_cmd */
 #include <nvme/nvme_linux.h> /* nvme_admin_abort_cmd, struct nvme_command body */
@@ -165,7 +164,7 @@ void ProcessCommand(struct IOStdReq *io)
 
     case HD_SCSICMD:
     {
-        BYTE scsi_err = nvme_handle_scsi_cmd(io);
+        BYTE scsi_err = handle_scsi_cmd(io);
         if (scsi_err != NVME_IO_ASYNC)
             reply_io(io, scsi_err);
         break;

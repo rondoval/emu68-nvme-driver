@@ -43,9 +43,10 @@ add_executable(nvme.device
     src/unit_task.c
     src/irq.c
     src/unit_commands.c
+    src/unit_commands_scsi.c
     src/nvme/nvme_probe.c
-    src/nvme/nvme_scsi.c
     src/nvme/nvme_io.c
+    src/nvme/nvme_hmb.c
     src/nvme/nvme_constants.c
     mounter/mounter.c
     mounter/mounter_string.c
