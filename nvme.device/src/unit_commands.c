@@ -17,8 +17,7 @@
 
 #include <device.h>
 #include <nvme/nvme_io.h>
-#include <nvme/nvme.h>       /* struct nvme_command, nvme_submit_sync_cmd */
-#include <nvme/nvme_linux.h> /* nvme_admin_abort_cmd, struct nvme_command body */
+#include <nvme/nvme_linux.h> /* nvme_cmd_read / nvme_cmd_write opcodes */
 
 /*
  * reply_io - set error code and reply an IOStdReq.
@@ -171,10 +170,20 @@ void ProcessCommand(struct IOStdReq *io)
     }
 
     case CMD_INTERNAL_ABORT_REQUEST:
-
-        if (ctrl && ctrl->memoryPool)
-            pool_free(ctrl->memoryPool, io);
-        /* Do NOT ReplyMsg — this is an internal request, not a caller request */
+    {
+        /* The abort message carries io->io_Data = target IOStdReq.
+         * nvme_io_abort searches the I/O queue's inflight table and
+         * submits the Abort admin command; the target's own CQE
+         * (NVME_SC_ABORT_REQ) arrives asynchronously and fires the
+         * normal completion path. */
+        struct IOStdReq *target = (struct IOStdReq *)io->io_Data;
+        KprintfH("[nvme] %s: internal abort target=%lx\n", __func__, (ULONG)target);
+        if (unit && unit->ctrl) {
+            (void)nvme_io_abort(unit->ctrl, target);
+            if (unit->ctrl->memoryPool)
+                pool_free(unit->ctrl->memoryPool, io);
+        }
+        /* Internal request: no ReplyMsg. */
         break;
     }
 
