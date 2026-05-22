@@ -16,7 +16,7 @@
 
 #include <device.h>
 #include <config.h>
-#include <nvme/nvme_regs.h>
+#include <nvme/nvme_linux.h>
 
 /*
  * nvme_int_isr - NVMe interrupt service routine.
