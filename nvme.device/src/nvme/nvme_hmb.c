@@ -84,7 +84,7 @@ static int nvme_set_host_mem(struct NVMeController *ctrl, u32 bits)
     cmd.features.dword14 = le32((u32)(dma_addr >> 32));
     cmd.features.dword15 = le32((u32)ctrl->hmb_nr_descs);
 
-    int ret = nvme_submit_sync_cmd(ctrl->core, &cmd, NULL, 0);
+    int ret = nvme_submit_sync_cmd(ctrl->core, &cmd, NULL, NULL, 0);
     if (ret)
     {
         Kprintf("[nvme] %s: Set Features HMB failed (bits=0x%lx status=%ld)\n",
