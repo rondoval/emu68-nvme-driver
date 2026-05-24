@@ -52,6 +52,8 @@
 #include <proto/expansion.h>
 #include <proto/dos.h>
 
+#include <strutil.h>
+
 #include "ndkcompat.h"
 
 #include "mounter.h"
@@ -1159,18 +1161,18 @@ static bool isDataCD(struct IOStdReq *ior)
 // Returns: -1 on error, 0 if not CDTV/AMIGA BOOT, 1 if bootable
 static LONG CheckPVD(struct IOStdReq *ior, struct ExecBase *SysBase)
 {
-	const char sys_id_1[] = "CDTV";
-	const char sys_id_2[] = "AMIGA BOOT";
-	const char iso_id[]   = "CD001";
+	static const UBYTE sys_id_1[] = "CDTV";
+	static const UBYTE sys_id_2[] = "AMIGA BOOT";
+	static const UBYTE iso_id[]   = "CD001";
 
 	BYTE err = 0;
 	LONG ret = -1;
-	char *buf = NULL;
+	UBYTE *buf = NULL;
 
 	if (!(buf = AllocMem(2048,MEMF_ANY|MEMF_CLEAR))) goto done;
 
-	char *id_string = buf + 1;
-	char *system_id = buf + 8;
+	UBYTE *id_string = buf + 1;
+	UBYTE *system_id = buf + 8;
 
 	ior->io_Command = CMD_READ;
 	ior->io_Data    = buf;
@@ -1183,8 +1185,9 @@ static LONG CheckPVD(struct IOStdReq *ior, struct ExecBase *SysBase)
 
 	if (err == 0) {
 		// Check ISO ID String & for PVD Version & Type code
-		if ((strncmp(iso_id,id_string,5) == 0) && buf[0] == 1 && buf[6] == 1) {
-			ret = (strncmp(sys_id_1,system_id,strlen(sys_id_1)) == 0 || strncmp(sys_id_2,system_id,strlen(sys_id_2)) == 0);
+		if ((_Strncmp(iso_id, id_string, 5) == 0) && buf[0] == 1 && buf[6] == 1) {
+			ret = (_Strncmp(sys_id_1, system_id, (LONG)(sizeof(sys_id_1) - 1)) == 0 ||
+				_Strncmp(sys_id_2, system_id, (LONG)(sizeof(sys_id_2) - 1)) == 0);
 		}
 	}
 

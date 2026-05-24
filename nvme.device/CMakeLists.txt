@@ -50,7 +50,6 @@ add_executable(nvme.device
     src/nvme/nvme_hmb.c
     src/nvme/nvme_constants.c
     mounter/mounter.c
-    mounter/mounter_string.c
     src/device_end.c
 )
 
