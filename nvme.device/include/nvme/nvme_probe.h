@@ -1,0 +1,46 @@
+/* SPDX-License-Identifier: GPL-2.0-only */
+#ifndef NVME_PROBE_H
+#define NVME_PROBE_H
+
+/* ------------------------------------------------------------------ */
+/* Device-level probe / unprobe                                        */
+/* ------------------------------------------------------------------ */
+
+/*
+ * nvme_probe_all - enumerate all NVMe PCIe controllers and build the unit
+ * map.  Must be called exactly once before any UnitOpen.
+ *
+ * Returns 0 if at least one controller was found, -1 otherwise.
+ */
+s32 nvme_probe_all(struct NVMeDevice *base);
+
+/*
+ * nvme_unprobe_all - tear down every controller / unit allocated by
+ * nvme_probe_all().  Called from the device expunge path.
+ */
+void nvme_unprobe_all(struct NVMeDevice *base);
+
+/* ------------------------------------------------------------------ */
+/* Per-controller lifecycle                                            */
+/* ------------------------------------------------------------------ */
+
+/*
+ * nvme_reset_controller - run the bring-up sequence on an already-
+ * allocated controller.  Called from the unit task in response to a
+ * reset_signal raised by nvme_reset_ctrl().
+ */
+void nvme_reset_controller(struct NVMeController *ctrl);
+
+/* ------------------------------------------------------------------ */
+/* Amiga-side helpers populated by probe                                */
+/* ------------------------------------------------------------------ */
+
+/*
+ * nvme_alloc_nvmeunit - callback fired by nvme_scan.c when a new NSID
+ * is discovered.  Allocates and links an NVMeUnit reflecting the
+ * namespace geometry.
+ */
+struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl, u32 nsid,
+		ULONG blockSize, u8 blockShift, u64 logicalSectors);
+
+#endif /* NVME_PROBE_H */

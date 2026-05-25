@@ -27,12 +27,17 @@
 #include <types.h>
 #include <minlist.h>
 #include <debug.h>
+#include <timing.h> /* get_time, delay_us, delay_ms, time_deadline_passed */
 
-#include <device.h>
-#include <config.h>
-
-#include <nvme/nvme.h> /* struct NVMeController, nvme_init_ctrl, … */
+#include <nvme/nvme_admin.h> /* nvme_configure_timestamp, nvme_configure_host_options */
+#include <nvme/nvme_aen.h>   /* nvme_enable_aen, nvme_submit_aer */
+#include <nvme/nvme_ctrl.h>  /* nvme_admin_ctrl, nvme_change_ctrl_state */
 #include <nvme/nvme_hmb.h>
+#include <nvme/nvme_kpool.h> /* nvme_queue_scan, nvme_change_uevent */
+#include <nvme/nvme_log.h>   /* nvme_init_identify */
+#include <nvme/nvme_probe.h>
+#include <nvme/nvme_queue.h> /* nvme_setup_admin_queue, nvme_setup_io_queue, nvme_unquiesce_io_queues */
+#include <nvme/nvme_scan.h>  /* nvme_scan_work */
 
 /* NVMe PCI class code: Mass Storage / NVM Express (base 0x01, sub 0x08, prog-if 0x02) */
 #define NVME_PCI_CLASS 0x010802UL
@@ -91,6 +96,259 @@ static void hw_shutdown(struct NVMeController *ctrl)
     if (pcielibBase && ctrl->pci_dev)
         SetBoardAttrs(ctrl->pci_dev, PRM_BoardOwner, 0UL, TAG_DONE);
     ctrl->bar0 = NULL;
+}
+
+/* ------------------------------------------------------------------ */
+/* Controller lifecycle primitives (moved from core.c)                 */
+/* ------------------------------------------------------------------ */
+
+/*
+ * nvme_wait_ready - poll CSTS until a masked field reaches an expected value
+ *
+ * Spins reading NVME_REG_CSTS at 1 ms intervals until (csts & mask) == val,
+ * the @timeout expires, or the register reads all-Fs (device removed).
+ * Used by nvme_enable_ctrl() to wait for CSTS.RDY=1 and nvme_disable_ctrl()
+ * to wait for shutdown completion.
+ *
+ * @ctrl:    controller to poll
+ * @mask:    bit mask to apply to CSTS before comparison
+ * @val:     expected value after masking
+ * @timeout: timeout in seconds (matches NVMe CAP.TO encoding)
+ * @op:      human-readable operation name for the error message
+ * Returns: 0 on success, -ENODEV on timeout / device removal
+ */
+static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
+                           u32 timeout, const char *op)
+{
+    u32 start_us = get_time();
+    u32 deadline_us = start_us + timeout * 1000000U;
+    int polls = 0;
+
+    Kprintf("[nvme] wait_ready(%s): mask=%08lx val=%08lx timeout=%lu s\n",
+            op, (ULONG)mask, (ULONG)val, (ULONG)timeout);
+
+    for (;;)
+    {
+        u32 csts = nvme_reg_read32(ctrl, NVME_REG_CSTS);
+        polls++;
+        if (csts == ~0U)
+        {
+            Kprintf("[nvme] wait_ready(%s): CSTS=~0 — device gone\n", op);
+            return -ENODEV;
+        }
+        if ((csts & mask) == val)
+        {
+            KprintfH("[nvme] wait_ready(%s): OK CSTS=%08lx after %ld polls / %lu ms\n",
+                     op, (ULONG)csts, (LONG)polls,
+                     (ULONG)((get_time() - start_us) / 1000U));
+            return 0;
+        }
+
+        delay_ms(1);
+        if (time_deadline_passed(get_time(), deadline_us))
+        {
+            Kprintf("[nvme] %s: Device not ready; aborting %s, CSTS=%08lx after %lu ms\n",
+                    __func__, op, (ULONG)csts,
+                    (ULONG)((get_time() - start_us) / 1000U));
+            return -ENODEV;
+        }
+    }
+}
+
+static int nvme_init_ctrl(struct NVMeController *ctrl, struct device *dev,
+                          unsigned long quirks)
+{
+    ctrl->state = NVME_CTRL_NEW;
+    ctrl->passthru_err_log_enabled = FALSE;
+    _NewMinList(&ctrl->namespaces);
+    InitSemaphore(&ctrl->scan_lock);
+    ctrl->dev = dev;
+    ctrl->quirks = quirks;
+    return 0;
+}
+
+/*
+ * Initialize the cached copies of the Identify data and various controller
+ * register in our nvme_ctrl structure.  This should be called as soon as
+ * the admin queue is fully up and running.
+ */
+static int nvme_init_ctrl_finish(struct NVMeController *ctrl, BOOL was_suspended)
+{
+    int ret;
+    (void)was_suspended;
+
+    ctrl->vs = nvme_reg_read32(ctrl, NVME_REG_VS);
+
+    ctrl->sqsize = (u16)((NVME_CAP_MQES(ctrl->cap) < (u32)ctrl->sqsize) ? NVME_CAP_MQES(ctrl->cap) : (u32)ctrl->sqsize);
+
+    if (ctrl->vs >= NVME_VS(1, 1, 0))
+        ctrl->subsystem = NVME_CAP_NSSRC(ctrl->cap);
+
+    ret = nvme_init_identify(ctrl);
+    if (ret)
+        return ret;
+
+    if (nvme_admin_ctrl(ctrl))
+    {
+        /*
+         * An admin controller has one admin queue, but no I/O queues.
+         * Override queue_count so it only creates an admin queue.
+         */
+        Kprintf("[nvme] %s: Subsystem is an administrative controller\n",
+                __func__);
+        ctrl->queue_count = 1;
+    }
+
+    ret = nvme_configure_timestamp(ctrl);
+    if (ret < 0)
+        return ret;
+
+    ret = nvme_configure_host_options(ctrl);
+    if (ret < 0)
+        return ret;
+
+    clear_bit(NVME_CTRL_DIRTY_CAPABILITY, &ctrl->flags);
+    ctrl->identified = TRUE;
+
+    return 0;
+}
+
+/*
+ * nvme_enable_ctrl - configure and enable an NVMe controller
+ *
+ * Reads CAP, validates the host page size is within the device's supported
+ * range, selects the command set (CSI or NVM-only), sets CC fields (page
+ * size, arbitration, entry sizes), writes CC.EN=1, then waits for CSTS.RDY.
+ * Reads CRTO if the controller supports it to use the correct ready timeout.
+ * Called at the start of each controller initialization or reset recovery.
+ *
+ * @ctrl: controller to enable
+ * Returns: 0 on success, -ENODEV if page size incompatible or timeout,
+ *          negative errno on register read/write failure
+ */
+static int nvme_enable_ctrl(struct NVMeController *ctrl)
+{
+    ctrl->cap = nvme_reg_read64(ctrl, NVME_REG_CAP);
+    Kprintf("[nvme] enable_ctrl: CAP=%08lx%08lx\n", (u32)(ctrl->cap >> 32), (u32)ctrl->cap);
+    unsigned dev_page_min = NVME_CAP_MPSMIN(ctrl->cap) + 12;
+
+    if (NVME_CTRL_PAGE_SHIFT < dev_page_min)
+    {
+        Kprintf("[nvme] %s: Minimum device page size %lu too large for host (%lu)\n",
+                __func__, 1 << dev_page_min, 1 << NVME_CTRL_PAGE_SHIFT);
+        return -ENODEV;
+    }
+
+    if (NVME_CAP_CSS(ctrl->cap) & NVME_CAP_CSS_CSI)
+        ctrl->ctrl_config = NVME_CC_CSS_CSI;
+    else
+        ctrl->ctrl_config = NVME_CC_CSS_NVM;
+
+    /*
+     * Setting CRIME results in CSTS.RDY before the media is ready. This
+     * makes it possible for media related commands to return the error
+     * NVME_SC_ADMIN_COMMAND_MEDIA_NOT_READY. Until the driver is
+     * restructured to handle retries, disable CC.CRIME.
+     */
+    ctrl->ctrl_config &= ~(u32)NVME_CC_CRIME;
+
+    ctrl->ctrl_config |= (NVME_CTRL_PAGE_SHIFT - 12) << NVME_CC_MPS_SHIFT;
+    ctrl->ctrl_config |= NVME_CC_AMS_RR | NVME_CC_SHN_NONE;
+    ctrl->ctrl_config |= NVME_CC_IOSQES | NVME_CC_IOCQES;
+    nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
+
+    /* CAP value may change after initial CC write */
+    ctrl->cap = nvme_reg_read64(ctrl, NVME_REG_CAP);
+
+    u32 timeout = NVME_CAP_TIMEOUT(ctrl->cap);
+    if (ctrl->cap & NVME_CAP_CRMS_CRWMS)
+    {
+        u32 crto = nvme_reg_read32(ctrl, NVME_REG_CRTO);
+
+        /*
+         * CRTO should always be greater or equal to CAP.TO, but some
+         * devices are known to get this wrong. Use the larger of the
+         * two values.
+         */
+        u32 ready_timeout = NVME_CRTO_CRWMT(crto);
+
+        if (ready_timeout < timeout)
+            Kprintf("[nvme] %s: bad crto:%lx cap:%lx\n",
+                    __func__, crto, ctrl->cap);
+        else
+            timeout = ready_timeout;
+    }
+
+    ctrl->ctrl_config |= NVME_CC_ENABLE;
+    Kprintf("[nvme] enable_ctrl: writing final CC=%08lx (with CC.EN)\n", ctrl->ctrl_config);
+    nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
+    Kprintf("[nvme] enable_ctrl: now waiting for CSTS.RDY=1, timeout=%lu s\n", (ULONG)((timeout + 1) / 2));
+    return nvme_wait_ready(ctrl, NVME_CSTS_RDY, NVME_CSTS_RDY,
+                           (timeout + 1) / 2, "initialisation");
+}
+
+/*
+ * nvme_disable_ctrl - disable a controller or initiate a shutdown
+ *
+ * Clears CC.EN (or sets CC.SHN for a clean shutdown) and waits for the
+ * controller to acknowledge via CSTS.RDY or CSTS.SHST.  For reset (not
+ * shutdown), applies the DELAY_BEFORE_CHK_RDY quirk if needed.  Called
+ * during controller reset, shutdown, and removal.
+ *
+ * @ctrl:     controller to disable
+ * @shutdown: TRUE for a clean NVM Subsystem shutdown, FALSE for a bare reset
+ * Returns: 0 on success, -ENODEV if the controller does not respond
+ */
+static int nvme_disable_ctrl(struct NVMeController *ctrl, BOOL shutdown)
+{
+    u32 csts_before = nvme_reg_read32(ctrl, NVME_REG_CSTS);
+
+    Kprintf("[nvme] disable_ctrl(shutdown=%ld): CSTS_before=%08lx CC_before=%08lx\n",
+            (LONG)shutdown, csts_before, ctrl->ctrl_config);
+
+    ctrl->ctrl_config &= ~(u32)NVME_CC_SHN_MASK;
+    if (shutdown)
+        ctrl->ctrl_config |= NVME_CC_SHN_NORMAL;
+    else
+        ctrl->ctrl_config &= ~(u32)NVME_CC_ENABLE;
+
+    KprintfH("[nvme] disable_ctrl: writing CC=%08lx\n", ctrl->ctrl_config);
+    nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
+
+    if (shutdown)
+    {
+        return nvme_wait_ready(ctrl, NVME_CSTS_SHST_MASK,
+                               NVME_CSTS_SHST_CMPLT,
+                               ctrl->shutdown_timeout, "shutdown");
+    }
+    if (ctrl->quirks & NVME_QUIRK_DELAY_BEFORE_CHK_RDY)
+        delay_ms(NVME_QUIRK_DELAY_AMOUNT);
+    return nvme_wait_ready(ctrl, NVME_CSTS_RDY, 0,
+                           (u32)((NVME_CAP_TIMEOUT(ctrl->cap) + 1U) / 2U), "reset");
+}
+
+/*
+ * nvme_start_ctrl - arm the controller for serving I/O after the LIVE
+ * transition.  Configures + posts the first AER and unquiesces the
+ * I/O dispatch path.
+ *
+ * Called from nvme_probe_controller (initial bringup) and
+ * nvme_reset_controller (reset recovery) — both immediately after
+ * nvme_change_ctrl_state(NVME_CTRL_LIVE).  Each caller follows with
+ * the namespace scan flavor appropriate to its task context:
+ *   - probe runs on a foreign task → nvme_scan_work (sync, units
+ *     visible before probe returns so openLib can find them).
+ *   - reset runs on the unit task  → nvme_queue_scan (async, spawns
+ *     a fresh ScanWorker; sync admin from the unit task deadlocks).
+ *
+ * NVME_CTRL_STARTED_ONCE is intentionally not set — nothing in the
+ * compiled Amiga sources reads it.
+ */
+static void nvme_start_ctrl(struct NVMeController *ctrl)
+{
+    nvme_enable_aen(ctrl);
+    nvme_submit_aer(ctrl);
+    nvme_unquiesce_io_queues(ctrl);
 }
 
 /* ------------------------------------------------------------------ */
@@ -198,9 +456,16 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
 
     nvme_change_ctrl_state(ctrl, NVME_CTRL_LIVE);
 
+    /* Arm AEN and unquiesce I/O dispatch before the scan so we won't
+     * miss namespace-change events the scan might trigger. */
+    nvme_start_ctrl(ctrl);
+
     KprintfH("[nvme] %s: starting namespace scan\n", __func__);
     /* Identify Controller + per-NSID Identify; each found NSID calls
-     * nvme_alloc_nvmeunit which adds a NVMeUnit to base->units. */
+     * nvme_alloc_nvmeunit which adds a NVMeUnit to base->units.
+     * Sync call: probe runs on a foreign task, and units must be
+     * visible in base->units before nvme_probe_all returns so
+     * subsequent openLib calls can find them. */
     nvme_scan_work(ctrl);
     KprintfH("[nvme] %s: namespace scan complete\n", __func__);
 
@@ -260,64 +525,6 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
     Kprintf("[nvme] %s: unit %ld NSID %lu blockSize=%lu blocks=%lu\n", __func__,
             unit->unitNumber, (ULONG)nsid, blockSize, (ULONG)logicalSectors);
     return unit;
-}
-
-/*
- * nvme_cache_id_strings - stash Identify Controller text fields.
- *
- * Called once by core.c::nvme_init_identify after the
- * Identify Controller (CNS=0x01) response is parsed.  The buffer
- * lives in pool memory and is freed by core.c when the function
- * returns, so we copy out before that happens.
- *
- * Strings are space-padded fixed-width per NVMe spec §5.15.2;
- * nvme_scsi.c handles trimming when populating the INQUIRY response.
- */
-void nvme_cache_id_strings(struct NVMeController *ctrl,
-                           const char *mn, const char *fr,
-                           const char *sn)
-{
-    if (!ctrl)
-        return;
-    CopyMem(mn, ctrl->id_strings.model, sizeof(ctrl->id_strings.model));
-    CopyMem(fr, ctrl->id_strings.firmware, sizeof(ctrl->id_strings.firmware));
-    CopyMem(sn, ctrl->id_strings.serial, sizeof(ctrl->id_strings.serial));
-    Kprintf("[nvme] %s: model='%.40s' fw='%.8s' sn='%.20s'\n",
-            __func__,
-            ctrl->id_strings.model,
-            ctrl->id_strings.firmware,
-            ctrl->id_strings.serial);
-}
-
-/*
- * nvme_set_limits - record per-controller transfer ceiling.
- *
- * Three inputs combine:
- *   1. Identify Controller MDTS field (passed in as @max_hw_sectors,
- *      in 512B units; UINT_MAX when id->mdts == 0).
- *   2. NVME_AMIGA_DEFAULT_MAX_BYTES — fallback for MDTS-unreported
- *      devices, matching Linux's spirit (Linux uses NVME_MAX_BYTES =
- *      8 MiB in pci.c).
- */
-#define NVME_AMIGA_DEFAULT_MAX_BYTES (8UL * 1024UL * 1024UL)
-
-void nvme_set_limits(struct NVMeController *ctrl, u32 max_hw_sectors)
-{
-    u32 bytes;
-
-    if (!ctrl)
-        return;
-
-    if (max_hw_sectors == 0 || max_hw_sectors == U32_MAX)
-        bytes = NVME_AMIGA_DEFAULT_MAX_BYTES;
-    else
-        bytes = max_hw_sectors << 9;
-
-    ctrl->max_transfer_bytes = bytes;
-
-    Kprintf("[nvme] %s: max_hw_sectors=%lu max_transfer_bytes=%lu\n",
-            __func__, (ULONG)max_hw_sectors,
-            (ULONG)ctrl->max_transfer_bytes);
 }
 
 /* ------------------------------------------------------------------ */
@@ -399,6 +606,10 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         Kprintf("[nvme] %s: tearing down ctrl %lx\n", __func__,
                 (ULONG)ctrl->pci_dev);
 
+        /* Stop draining the I/O msgPort before tearing the device down,
+         * so no new BeginIO races against the shutdown sequence. */
+        nvme_quiesce_io_queues(ctrl);
+
         if (ctrl->bar0)
         {
             /* Release Host Memory Buffer first.  This issues Set
@@ -475,6 +686,10 @@ void nvme_reset_controller(struct NVMeController *ctrl)
         return;
     }
 
+    /* Hold off new I/O dispatch from the msgPort while we tear the
+     * device down.  Inflight requests are about to be cancelled. */
+    nvme_quiesce_io_queues(ctrl);
+
     nvme_cancel_tagset(ctrl);
 
     if (nvme_disable_ctrl(ctrl, FALSE) != 0)
@@ -502,7 +717,12 @@ void nvme_reset_controller(struct NVMeController *ctrl)
     nvme_change_ctrl_state(ctrl, NVME_CTRL_CONNECTING);
     nvme_change_ctrl_state(ctrl, NVME_CTRL_LIVE);
 
-    nvme_scan_work(ctrl);
+    /* Re-arm AEN and release the I/O msgPort.  Reset runs on the unit
+     * task, so we MUST defer the rescan via nvme_queue_scan (signals
+     * the unit task to spawn a ScanWorker); a sync nvme_scan_work
+     * here would deadlock on its own admin completions. */
+    nvme_start_ctrl(ctrl);
+    nvme_queue_scan(ctrl);
 
     Kprintf("[nvme] reset: complete, controller LIVE\n");
     return;
