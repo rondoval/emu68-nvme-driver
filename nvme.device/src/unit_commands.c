@@ -16,8 +16,8 @@
 #include <memory.h>
 
 #include <device.h>
+#include <nvme/nvme_admin.h> /* nvme_io_abort */
 #include <nvme/nvme_io.h>
-#include <nvme/nvme_linux.h> /* nvme_cmd_read / nvme_cmd_write opcodes */
 
 /*
  * reply_io - set error code and reply an IOStdReq.

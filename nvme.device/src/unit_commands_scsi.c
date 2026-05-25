@@ -27,8 +27,6 @@
 
 #include <device.h>
 #include <nvme/nvme_io.h>
-#include <nvme/nvme.h>
-#include <nvme/nvme_linux.h>
 
 /* ------------------------------------------------------------------ */
 /* SCSI CDB opcodes (SPC-4 / SBC-3).                                   */

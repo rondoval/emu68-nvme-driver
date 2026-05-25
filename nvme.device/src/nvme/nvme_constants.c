@@ -5,6 +5,7 @@
  */
 
 #include <nvme/nvme.h>
+#include <nvme/nvme_constants.h>
 
 static const char * const nvme_ops[] = {
 	[nvme_cmd_flush] = "Flush",

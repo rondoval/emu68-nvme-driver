@@ -33,15 +33,11 @@
 #include <proto/exec.h>
 #endif
 
-#include <exec/errors.h>
 #include <debug.h>
-#include <memory.h>
 
 #include <device.h>
 #include <nvme/nvme_hmb.h>
-#include <nvme/nvme.h>
-#include <nvme/nvme_io.h>
-#include <nvme/nvme_linux.h>
+#include <nvme/nvme_admin.h>
 
 /*
  * Tunables.  Match the Linux defaults where reasonable — PiStorm

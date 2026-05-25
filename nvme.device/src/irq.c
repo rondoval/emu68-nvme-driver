@@ -11,12 +11,8 @@
 #endif
 
 #include <iomem.h>
-#include <debug.h>
-#include <libraries/openpci.h>
 
 #include <device.h>
-#include <config.h>
-#include <nvme/nvme_linux.h>
 
 /*
  * nvme_int_isr - NVMe interrupt service routine.
