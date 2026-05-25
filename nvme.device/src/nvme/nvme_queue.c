@@ -422,7 +422,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     union nvme_result result;
     int ret;
 
-    KprintfH("[nvme] setup_io_queue: ctrl=%lx core=%lx\n", (ULONG)ctrl, (ULONG)ctrl->core);
+    KprintfH("[nvme] setup_io_queue: ctrl=%lx\n", (ULONG)ctrl);
 
     /* Step 1: ask for 1 I/O SQ and 1 I/O CQ.  dword11 encoding:
      * bits[15:0] = NSQR (0-based), bits[31:16] = NCQR (0-based). */
@@ -430,7 +430,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     cmd.features.opcode = nvme_admin_set_features;
     cmd.features.fid = le32(NVME_FEAT_NUM_QUEUES);
     cmd.features.dword11 = le32(0); /* request 1+1 (zero-based) */
-    ret = nvme_submit_sync_cmd(ctrl->core, &cmd, &result, NULL, 0);
+    ret = nvme_submit_sync_cmd(ctrl, &cmd, &result, NULL, 0);
     if (ret)
     {
         Kprintf("[nvme] %s: Set Features (Num Queues) failed: %ld\n", __func__, ret);
@@ -455,7 +455,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     cmd.create_cq.cq_flags = le16(NVME_QUEUE_PHYS_CONTIG |
                                   NVME_CQ_IRQ_ENABLED);
     cmd.create_cq.irq_vector = le16(0);
-    ret = nvme_submit_sync_cmd(ctrl->core, &cmd, NULL, NULL, 0);
+    ret = nvme_submit_sync_cmd(ctrl, &cmd, NULL, NULL, 0);
     if (ret)
     {
         Kprintf("[nvme] %s: Create I/O CQ failed: %ld\n", __func__, ret);
@@ -471,7 +471,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     cmd.create_sq.sq_flags = le16(NVME_QUEUE_PHYS_CONTIG |
                                   NVME_SQ_PRIO_URGENT);
     cmd.create_sq.cqid = le16(NVME_IO_QID);
-    ret = nvme_submit_sync_cmd(ctrl->core, &cmd, NULL, NULL, 0);
+    ret = nvme_submit_sync_cmd(ctrl, &cmd, NULL, NULL, 0);
     if (ret)
     {
         Kprintf("[nvme] %s: Create I/O SQ failed: %ld\n", __func__, ret);

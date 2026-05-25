@@ -84,7 +84,7 @@ static int nvme_set_host_mem(struct NVMeController *ctrl, u32 bits)
     cmd.features.dword14 = le32((u32)(dma_addr >> 32));
     cmd.features.dword15 = le32((u32)ctrl->hmb_nr_descs);
 
-    int ret = nvme_submit_sync_cmd(ctrl->core, &cmd, NULL, NULL, 0);
+    int ret = nvme_submit_sync_cmd(ctrl, &cmd, NULL, NULL, 0);
     if (ret)
     {
         Kprintf("[nvme] %s: Set Features HMB failed (bits=0x%lx status=%ld)\n",
@@ -136,13 +136,13 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
     u32 chunks_allocated = 0;
     u64 total_allocated = 0;
 
-    const u64 hmminds_bytes = (u64)ctrl->core->hmminds * NVME_CTRL_PAGE_SIZE;
+    const u64 hmminds_bytes = (u64)ctrl->hmminds * NVME_CTRL_PAGE_SIZE;
     const u64 floor = hmminds_bytes > NVME_HMB_MIN_CHUNK ? hmminds_bytes : NVME_HMB_MIN_CHUNK;
 
     /* Per-descriptor cap.  hmmaxd==0 means "controller doesn't say" —
      * fall back to a bound derived from the smallest legal chunk, so
      * the descriptor table size stays sane. */
-    const u32 hmmaxd_cap = ctrl->core->hmmaxd ? ctrl->core->hmmaxd : (u32)((preferred + floor - 1) / floor);
+    const u32 hmmaxd_cap = ctrl->hmmaxd ? ctrl->hmmaxd : (u32)((preferred + floor - 1) / floor);
 
     /* Allocate the descriptor table up front, worst-case sized to
      * hmmaxd_cap.  Unused trailing entries stay zero; Set Features
@@ -268,29 +268,28 @@ static void hmb_chunks_free(struct NVMeController *ctrl)
  * (id->hmpre > 0), allocate a buffer and enable HMB via Set Features.
  *
  * Caller is the probe path, after nvme_init_ctrl_finish() has read
- * id->hmpre/hmmin/hmminds/hmmaxd into ctrl->core.  Failure is
+ * id->hmpre/hmmin/hmminds/hmmaxd into ctrl.  Failure is
  * non-fatal — the controller must function (albeit slower) without
  * HMB, so we just log and return.
  */
 void nvme_setup_host_mem(struct NVMeController *ctrl)
 {
-    struct nvme_ctrl *nc = ctrl ? ctrl->core : NULL;
     KprintfH("[nvme] %s: ctrl=%lx\n", __func__, (ULONG)ctrl);
-    if (!nc)
+    if (!ctrl)
     {
         Kprintf("[nvme] %s: NULL controller\n", __func__);
         return;
     }
 
-    if (nc->hmpre == 0)
+    if (ctrl->hmpre == 0)
     {
         Kprintf("[nvme] %s: controller does not request HMB (hmpre=0)\n",
                 __func__);
         return;
     }
 
-    u64 preferred = (u64)nc->hmpre * NVME_CTRL_PAGE_SIZE;
-    u64 minimum = (u64)nc->hmmin * NVME_CTRL_PAGE_SIZE;
+    u64 preferred = (u64)ctrl->hmpre * NVME_CTRL_PAGE_SIZE;
+    u64 minimum = (u64)ctrl->hmmin * NVME_CTRL_PAGE_SIZE;
 
     Kprintf("[nvme] %s: preferred=%lu MiB min=%lu MiB cap=%lu MiB\n",
             __func__,

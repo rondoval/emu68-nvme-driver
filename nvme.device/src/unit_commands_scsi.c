@@ -247,8 +247,7 @@ static void copy_padded(UBYTE *dst, const char *src, UWORD dstlen)
  */
 static BOOL unit_supports_dsm(struct NVMeUnit *unit)
 {
-    return unit && unit->ctrl && unit->ctrl->core &&
-           (unit->ctrl->core->oncs & NVME_CTRL_ONCS_DSM) != 0;
+    return unit && unit->ctrl && (unit->ctrl->oncs & NVME_CTRL_ONCS_DSM) != 0;
 }
 
 /* Helper: clamp the response to scsi_Length and stamp scsi_Actual. */

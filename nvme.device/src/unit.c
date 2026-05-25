@@ -21,18 +21,18 @@
  * the heavy lifting (PCIe ownership, BAR0 map, memory pool,
  * controller task, admin/IO queues, namespace scan) all happened at
  * probe time in nvme_probe_controller.  UnitOpen now just bumps the
- * open counters.  If probe failed for this controller, ctrl->core is
+ * open counters.  If probe failed for this controller, ctrl is
  * NULL and we refuse the open.
  */
 s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
 {
     struct NVMeController *ctrl = unit->ctrl;
 
-    KprintfH("[nvme] UnitOpen: unit=%lx unitNumber=%ld nsid=%lu flags=0x%lx ctrl=%lx core=%lx\n",
+    KprintfH("[nvme] UnitOpen: unit=%lx unitNumber=%ld nsid=%lu flags=0x%lx ctrl=%lx\n",
              (ULONG)unit, unitNumber, unit->nsid, flags,
-             (ULONG)ctrl, (ULONG)(ctrl ? ctrl->core : NULL));
+             (ULONG)ctrl);
 
-    if (!ctrl->core) {
+    if (!ctrl) {
         Kprintf("[nvme] %s: controller %lx never brought up\n",
                 __func__, (ULONG)ctrl->pci_dev);
         return ERR_CONTROLLER_ERROR;
