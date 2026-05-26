@@ -615,9 +615,13 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         Kprintf("[nvme] %s: tearing down ctrl %lx\n", __func__,
                 (ULONG)ctrl->pci_dev);
 
-        /* Stop draining the I/O msgPort before tearing the device down,
-         * so no new BeginIO races against the shutdown sequence. */
+        /* Stop draining both ports before tearing the device down, then
+         * force-complete every still-inflight request on both queues
+         * so blocked waiters / IOStdReqs unblock before we free rings. */
         nvme_quiesce_io_queues(ctrl);
+        nvme_quiesce_admin_queue(ctrl);
+        nvme_flush_queue_inflight(&ctrl->io_q);
+        nvme_flush_queue_inflight(&ctrl->admin_q);
 
         if (ctrl->bar0)
         {
@@ -699,11 +703,14 @@ void nvme_reset_controller(struct NVMeController *ctrl)
         return;
     }
 
-    /* Hold off new I/O dispatch from the msgPort while we tear the
-     * device down.  Inflight requests are about to be cancelled. */
+    /* Hold off new dispatch from msgPort and adminPort while we tear the
+     * device down.  Inflight requests on both queues are about to be
+     * cancelled; the unquiesce happens after the rings are rebuilt. */
     nvme_quiesce_io_queues(ctrl);
+    nvme_quiesce_admin_queue(ctrl);
 
-    nvme_cancel_tagset(ctrl);
+    nvme_flush_queue_inflight(&ctrl->io_q);
+    nvme_flush_queue_inflight(&ctrl->admin_q);
 
     if (nvme_disable_ctrl(ctrl, FALSE) != 0)
         Kprintf("[nvme] reset: disable_ctrl reports error (ignoring)\n");
@@ -721,6 +728,9 @@ void nvme_reset_controller(struct NVMeController *ctrl)
         Kprintf("[nvme] reset: enable_ctrl failed\n");
         goto dead;
     }
+    /* Admin queue is back up; AdminWorker can dispatch again before we
+     * use the admin path for Create I/O CQ/SQ. */
+    nvme_unquiesce_admin_queue(ctrl);
     if (nvme_setup_io_queue(ctrl) != 0)
     {
         Kprintf("[nvme] reset: setup_io_queue failed\n");
