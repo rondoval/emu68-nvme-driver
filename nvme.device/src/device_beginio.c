@@ -11,6 +11,7 @@
 #include <exec/io.h>
 #include <devices/trackdisk.h>
 #include <devices/newstyle.h>
+#include <devices/nvme.h>
 #include <debug.h>
 
 #include "../include/device.h"
@@ -47,6 +48,8 @@ static const UWORD SupportedCommands[] = {
     NSCMD_ETD_WRITE64,
     NSCMD_ETD_FORMAT64,
     NSCMD_DEVICEQUERY, /* quick */
+    NSCMD_NVME_ADMIN_PASS,
+    NSCMD_NVME_IO_PASS,
     0};
 
 /*
@@ -171,6 +174,20 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
         do_nscmd_devicequery(io);
         break;
 
+    case NSCMD_NVME_ADMIN_PASS:
+    case NSCMD_NVME_IO_PASS:
+        if (!io->io_Data || io->io_Length != sizeof(struct NVMePassthruCmd)) {
+            io->io_Error = IOERR_BADLENGTH;
+            break;
+        }
+        if (!unit->ctrl->admin_task) {
+            io->io_Error = IOERR_OPENFAIL;
+            break;
+        }
+        io->io_Flags &= (UBYTE)~IOF_QUICK;
+        PutMsg(unit->ctrl->adminPort, (struct Message *)io);
+        return;     /* AdminWorker ReplyMsg's after completion */
+
     default:
         /* All other commands (reads, writes, format, SCSI, …)
          * must run in the unit task context */
@@ -183,7 +200,7 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
         KprintfH("[nvme] beginIO: queuing command 0x%04lx to unit %ld\n",
                  (ULONG)io->io_Command, unit->unitNumber);
         io->io_Flags &= (UBYTE)~IOF_QUICK;
-        PutMsg(&unit->ctrl->msgPort, (struct Message *)io);
+        PutMsg(unit->ctrl->msgPort, (struct Message *)io);
     }
     else
     {

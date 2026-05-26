@@ -15,7 +15,9 @@
 
 #include <device.h>
 #include <config.h>
-#include <nvme/nvme.h>          /* nvme_scan_work, nvme_fw_act_work_amiga */
+#include <nvme/nvme.h>       /* types + inlines */
+#include <nvme/nvme_probe.h> /* nvme_reset_controller */
+#include <nvme/nvme_queue.h> /* nvme_process_completions, nvme_tick_watchdog */
 
 /*
  * UnitTask - per-controller task body.
@@ -24,28 +26,31 @@
  * this controller) and ctrl->irq_signal, then enters the main wait loop.
  *
  * Signals parent with SIGBREAKF_CTRL_F on successful startup or
- * SIGBREAKF_CTRL_C on failure so UnitTaskStart() can detect both cases.
+ * SIGBREAKF_CTRL_C on failure so task_spawn() can detect both cases.
  */
-static void UnitTask(struct NVMeController *ctrl, struct Task *parent)
+void UnitTask(struct NVMeController *ctrl, struct Task *parent)
 {
-    /* Initialise the shared controller message port */
-    _NewMinList((struct MinList *)&ctrl->msgPort.mp_MsgList);
-    ctrl->msgPort.mp_SigTask = FindTask(NULL);
-    BYTE msg_sigbit = AllocSignal(-1);
-    if (msg_sigbit == -1)
+    /* Retry queue used by nvme_retry_req for CRDT-deferred resubmits */
+    _NewMinList(&ctrl->retry_list);
+    ctrl->msgPort = CreateMsgPort();
+    if (!ctrl->msgPort)
     {
-        Kprintf("[nvme] %s: failed to allocate message signal\n", __func__);
+        Kprintf("[nvme] %s: failed to create message port\n", __func__);
         goto fail;
     }
-    ctrl->msgPort.mp_SigBit = (UBYTE)msg_sigbit;
-    ctrl->msgPort.mp_Flags = PA_SIGNAL;
-    ctrl->msgPort.mp_Node.ln_Type = NT_MSGPORT;
 
     ctrl->irq_signal = AllocSignal(-1);
     if (ctrl->irq_signal == -1)
     {
         Kprintf("[nvme] %s: failed to allocate IRQ signal\n", __func__);
-        goto free_msg_signal;
+        goto free_msg_port;
+    }
+
+    ctrl->reset_signal = AllocSignal(-1);
+    if (ctrl->reset_signal == -1)
+    {
+        Kprintf("[nvme] %s: failed to allocate reset signal\n", __func__);
+        goto free_irq_signal;
     }
 
     // Create a watchdog timer to check for command timeouts
@@ -54,7 +59,7 @@ static void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     if (!timerPort || !timerReq)
     {
         Kprintf("[nvme] %s: failed to create timer resources\n", __func__);
-        goto free_irq_signal;
+        goto free_timer_handles;
     }
 
     LONG ret = OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ,
@@ -62,7 +67,7 @@ static void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     if (ret)
     {
         Kprintf("[nvme] %s: failed to open timer.device (%ld)\n", __func__, ret);
-        goto free_timer;
+        goto free_timer_handles;
     }
 
     const u32 delay = UNIT_TASK_POLL_DELAY_MS * 1000UL; /* µs */
@@ -72,14 +77,15 @@ static void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     timerReq->tr_time.tv_micro = delay;
     SendIO(&timerReq->tr_node);
 
-    ctrl->task = FindTask(NULL);
+    ctrl->unit_task = FindTask(NULL);
     Signal(parent, SIGBREAKF_CTRL_F); /* signal success */
 
     Kprintf("[nvme] %s: controller task running (bar0=%lx)\n", __func__, (ULONG)ctrl->bar0);
 
-    ULONG waitMask = (1UL << ctrl->msgPort.mp_SigBit) |
+    ULONG waitMask = (1UL << ctrl->msgPort->mp_SigBit) |
                      (1UL << timerPort->mp_SigBit) |
                      (1UL << ctrl->irq_signal) |
+                     (1UL << ctrl->reset_signal) |
                      SIGBREAKF_CTRL_C;
     ULONG sigset;
 
@@ -93,11 +99,27 @@ static void UnitTask(struct NVMeController *ctrl, struct Task *parent)
             nvme_int_rearm(ctrl);
         }
 
-        if (sigset & (1UL << ctrl->msgPort.mp_SigBit))
+        if (sigset & (1UL << ctrl->reset_signal))
         {
-            struct IOStdReq *io;
-            while ((io = (struct IOStdReq *)GetMsg(&ctrl->msgPort)))
-                ProcessCommand(io);
+            /* Coalesce any further reset requests that arrived while
+             * we were processing other signals: clear the bit so a
+             * single reset cycle handles the burst. */
+            SetSignal(0, 1UL << ctrl->reset_signal);
+            nvme_reset_controller(ctrl);
+        }
+
+        if (sigset & (1UL << ctrl->msgPort->mp_SigBit))
+        {
+            /* Skip new I/O dispatch while quiesced or frozen — messages
+             * stay in the port; nvme_unquiesce_io_queues / nvme_unfreeze
+             * re-signal us so we drain them on resume. */
+            if (!test_bit(NVME_CTRL_STOPPED, &ctrl->flags) &&
+                !test_bit(NVME_CTRL_FROZEN, &ctrl->flags))
+            {
+                struct IOStdReq *io;
+                while ((io = (struct IOStdReq *)GetMsg(ctrl->msgPort)))
+                    ProcessCommand(io);
+            }
         }
 
         if (sigset & (1UL << timerPort->mp_SigBit))
@@ -123,39 +145,53 @@ static void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     } while ((sigset & SIGBREAKF_CTRL_C) == 0);
 
     CloseDevice(&timerReq->tr_node);
-free_timer:
-    DeleteIORequest((struct IORequest *)timerReq);
-    DeleteMsgPort(timerPort);
+free_timer_handles:
+    if (timerReq)
+        DeleteIORequest((struct IORequest *)timerReq);
+    if (timerPort)
+        DeleteMsgPort(timerPort);
+    FreeSignal(ctrl->reset_signal);
 free_irq_signal:
     FreeSignal(ctrl->irq_signal);
-free_msg_signal:
-    FreeSignal((BYTE)ctrl->msgPort.mp_SigBit);
-    ctrl->task = NULL;
+free_msg_port:
+    DeleteMsgPort(ctrl->msgPort);
+    ctrl->msgPort = NULL;
+    ctrl->unit_task = NULL;
     Signal(parent, SIGBREAKF_CTRL_C);
     return;
 
 fail:
-    ctrl->task = NULL;
+    ctrl->unit_task = NULL;
     Signal(parent, SIGBREAKF_CTRL_C);
 }
 
 /*
- * UnitTaskStart - allocate stack/task and start the controller task.
+ * task_spawn - allocate stack/Task/MemList and AddTask one of the
+ * controller worker tasks (UnitTask, AdminWorker).
  *
- * Waits for SIGBREAKF_CTRL_F (success) or SIGBREAKF_CTRL_C (failure)
- * from the new task before returning.
+ * Pushes (ctrl, parent) onto the new task's stack, AddTasks it, then
+ * blocks on SIGBREAKF_CTRL_F (success) or SIGBREAKF_CTRL_C (failure)
+ * from the spawned task.  The entry function is expected to clear its
+ * own slot on exit so task_join can detect completion.
+ *
+ * Generic in shape — both UnitTask and AdminWorker share the exact
+ * same launch sequence, only their entry function and task name
+ * differ.
  */
-s32 UnitTaskStart(struct NVMeController *ctrl)
+s32 task_spawn(struct NVMeController *ctrl,
+               task_entry entry,
+               const char *name)
 {
-    Kprintf("[nvme] %s: starting controller task\n", __func__);
+    Kprintf("[nvme] %s: starting %s\n", __func__, name);
 
-    struct MemList *ml = AllocMem(sizeof(struct MemList) + sizeof(struct MemEntry), MEMF_PUBLIC | MEMF_CLEAR);
+    struct MemList *ml = AllocMem(sizeof(struct MemList) + sizeof(struct MemEntry),
+                                  MEMF_PUBLIC | MEMF_CLEAR);
     struct Task *task = AllocMem(sizeof(struct Task), MEMF_PUBLIC | MEMF_CLEAR);
     ULONG *stack = AllocMem(STACK_SIZE, MEMF_PUBLIC | MEMF_CLEAR);
 
     if (!ml || !task || !stack)
     {
-        Kprintf("[nvme] %s: failed to allocate task resources\n", __func__);
+        Kprintf("[nvme] %s: alloc failed for %s\n", __func__, name);
         if (ml)
             FreeMem(ml, sizeof(struct MemList) + sizeof(struct MemEntry));
         if (task)
@@ -174,13 +210,13 @@ s32 UnitTaskStart(struct NVMeController *ctrl)
     task->tc_SPLower = stack;
     task->tc_SPUpper = &stack[STACK_SIZE / sizeof(ULONG)];
 
-    /* Push UnitTask arguments (ctrl, parent) onto the initial stack */
+    /* Push entry args (ctrl, parent) onto the initial stack. */
     ULONG *sp = (ULONG *)task->tc_SPUpper;
-    *--sp = (ULONG)FindTask(NULL); /* parent */
+    *--sp = (ULONG)FindTask(NULL);
     *--sp = (ULONG)ctrl;
     task->tc_SPReg = sp;
 
-    task->tc_Node.ln_Name = "NVMe storage driver";
+    task->tc_Node.ln_Name = (char *)name;
     task->tc_Node.ln_Type = NT_TASK;
     task->tc_Node.ln_Pri = UNIT_TASK_PRIORITY;
 
@@ -189,10 +225,10 @@ s32 UnitTaskStart(struct NVMeController *ctrl)
 
     SetSignal(0UL, SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_C);
 
-    APTR result = AddTask(task, UnitTask, NULL);
+    APTR result = AddTask(task, entry, NULL);
     if (!result)
     {
-        Kprintf("[nvme] %s: AddTask failed\n", __func__);
+        Kprintf("[nvme] %s: AddTask(%s) failed\n", __func__, name);
         FreeMem(ml, sizeof(struct MemList) + sizeof(struct MemEntry));
         FreeMem(task, sizeof(struct Task));
         FreeMem(stack, STACK_SIZE);
@@ -202,46 +238,46 @@ s32 UnitTaskStart(struct NVMeController *ctrl)
     ULONG sig = Wait(SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_C);
     if (sig & SIGBREAKF_CTRL_C)
     {
-        Kprintf("[nvme] %s: controller task failed to initialise\n", __func__);
-        FreeMem(ml, sizeof(struct MemList) + sizeof(struct MemEntry));
-        FreeMem(task, sizeof(struct Task));
-        FreeMem(stack, STACK_SIZE);
+        Kprintf("[nvme] %s: %s failed to initialise\n", __func__, name);
         return ERR_CONTROLLER_ERROR;
     }
 
-    Kprintf("[nvme] %s: controller task started\n", __func__);
+    Kprintf("[nvme] %s: %s started\n", __func__, name);
     return ERR_NO_ERROR;
 }
 
 /*
- * UnitTaskStop - signal the controller task to exit and wait until it does.
+ * task_join - signal CTRL_C and wait for the task to clear @slot.
+ *
+ * @slot points to a `struct Task *` field on the controller (e.g.
+ * &ctrl->unit_task or &ctrl->admin_task).  The entry function clears it on
+ * exit; we poll at 250 ms via timer.device, then free our timer.
  */
-void UnitTaskStop(struct NVMeController *ctrl)
+void task_join(struct Task **slot)
 {
-    if (!ctrl->task)
+    if (!slot || !*slot)
         return;
 
-    Kprintf("[nvme] %s: stopping controller task\n", __func__);
+    Kprintf("[nvme] %s: stopping task=%lx\n", __func__, (ULONG)*slot);
 
     struct MsgPort *timerPort = CreateMsgPort();
     struct timerequest *timerReq = CreateIORequest(timerPort, sizeof(struct timerequest));
+    BOOL haveTimer = FALSE;
 
     if (timerPort && timerReq)
     {
         BYTE result = OpenDevice((CONST_STRPTR) "timer.device", UNIT_VBLANK, (struct IORequest *)timerReq, LIB_MIN_VERSION);
-        if (result != NULL)
-        {
+        if (result)
             Kprintf("[nvme] %s: Failed to open timer device: %ld\n", __func__, result);
-            // We'll continue anyway
-        }
+        else
+            haveTimer = TRUE;
     }
 
-    Signal(ctrl->task, SIGBREAKF_CTRL_C);
+    Signal(*slot, SIGBREAKF_CTRL_C);
 
-    /* Poll until the task clears ctrl->task */
-    while (ctrl->task != NULL)
+    while (*slot != NULL)
     {
-        if (timerReq && timerPort)
+        if (haveTimer)
         {
             timerReq->tr_node.io_Command = TR_ADDREQUEST;
             timerReq->tr_time.tv_secs = 0;
@@ -252,13 +288,12 @@ void UnitTaskStop(struct NVMeController *ctrl)
 
     SetSignal(0UL, SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_C);
 
-    if (timerReq)
-    {
+    if (haveTimer)
         CloseDevice(&timerReq->tr_node);
+    if (timerReq)
         DeleteIORequest(&timerReq->tr_node);
-    }
     if (timerPort)
         DeleteMsgPort(timerPort);
 
-    Kprintf("[nvme] %s: controller task stopped\n", __func__);
+    Kprintf("[nvme] %s: task stopped\n", __func__);
 }

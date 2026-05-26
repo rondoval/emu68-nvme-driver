@@ -34,7 +34,7 @@ static inline LONG post_abort_request(struct NVMeUnit *unit, struct IOStdReq *io
     abort_req->io_Flags             = IOF_QUICK | REQ_INTERNAL;
     abort_req->io_Data              = io; /* request to abort */
 
-    PutMsg(&ctrl->msgPort, (struct Message *)abort_req);
+    PutMsg(ctrl->msgPort, (struct Message *)abort_req);
     return 0;
 }
 

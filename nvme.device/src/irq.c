@@ -47,7 +47,7 @@ static ULONG nvme_int_isr(struct ExecBase *execBase asm("a6"),
 
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
 
-    Signal(ctrl->task, 1UL << ctrl->irq_signal);
+    Signal(ctrl->unit_task, 1UL << ctrl->irq_signal);
     return 1;
 }
 
@@ -134,7 +134,7 @@ void nvme_int_rearm(struct NVMeController *ctrl)
     else if (!CheckSetINTxMask(ctrl->pci_dev, FALSE))
     {
         /* INTx unmask failed — re-signal ourselves so the task retries */
-        Signal(ctrl->task, 1UL << ctrl->irq_signal);
+        Signal(ctrl->unit_task, 1UL << ctrl->irq_signal);
         return;
     }
 

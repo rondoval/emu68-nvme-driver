@@ -381,18 +381,25 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         goto fail_hw;
     }
 
-    ret = UnitTaskStart(ctrl);
+    ret = task_spawn(ctrl, UnitTask, "NVMe storage driver");
     if (ret != ERR_NO_ERROR)
     {
-        Kprintf("[nvme] %s: UnitTaskStart failed: %ld\n", __func__, ret);
+        Kprintf("[nvme] %s: UnitTask spawn failed: %ld\n", __func__, ret);
         goto fail_pool;
+    }
+
+    ret = task_spawn(ctrl, AdminWorker, "NVMe admin worker");
+    if (ret != ERR_NO_ERROR)
+    {
+        Kprintf("[nvme] %s: AdminWorker spawn failed: %ld\n", __func__, ret);
+        goto fail_unit_task;
     }
 
     ret = nvme_int_enable(ctrl);
     if (ret != ERR_NO_ERROR)
     {
         Kprintf("[nvme] %s: nvme_int_enable failed: %ld\n", __func__, ret);
-        goto fail_task;
+        goto fail_admin_task;
     }
 
     // Initialise the state machine to NEW, namespaces MinList, scan_lock semaphore.
@@ -479,8 +486,10 @@ fail_admin:
     nvme_teardown_queue(&ctrl->admin_q);
 fail_int:
     nvme_int_shutdown(ctrl);
-fail_task:
-    UnitTaskStop(ctrl);
+fail_admin_task:
+    task_join(&ctrl->admin_task);
+fail_unit_task:
+    task_join(&ctrl->unit_task);
 fail_pool:
     DeletePool(ctrl->memoryPool);
     ctrl->memoryPool = NULL;
@@ -624,7 +633,11 @@ void nvme_unprobe_all(struct NVMeDevice *base)
             nvme_teardown_queue(&ctrl->admin_q);
         }
         nvme_int_shutdown(ctrl);
-        UnitTaskStop(ctrl);
+        /* Stop AdminWorker BEFORE the unit task: AdminWorker may be
+         * parked in nvme_submit_sync_cmd waiting on a CQE that only
+         * the unit task delivers. */
+        task_join(&ctrl->admin_task);
+        task_join(&ctrl->unit_task);
         hw_shutdown(ctrl);
         if (ctrl->memoryPool)
         {

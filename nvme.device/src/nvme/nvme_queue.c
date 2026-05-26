@@ -256,6 +256,11 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
         if (!req || req->submit_us == 0)
             continue;
 
+        /* AERs sit in the admin inflight[] indefinitely waiting for
+         * the controller to post an event.  Never abort them. */
+        if (req->flags & NVME_REQ_AER)
+            continue;
+
         /* an Abort is already in flight for this request.
          * Measure the grace period separately from submit_us. */
         if (req->flags & NVME_REQ_ABORT_SENT)
@@ -267,12 +272,12 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
                     "opcode=0x%02lx — requesting controller reset\n",
                     (ULONG)q->qid, (ULONG)req->tag,
                     (ULONG)req->cmd.common.opcode);
-            Signal(ctrl->task, 1UL << ctrl->reset_signal);
+            Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
             return; /* one reset is enough per tick */
         }
 
         /* first timeout test. */
-        u32 limit_ms   = req->unit ? NVME_IO_TIMEOUT : NVME_ADMIN_TIMEOUT;
+        u32 limit_ms = req->unit ? NVME_IO_TIMEOUT : NVME_ADMIN_TIMEOUT;
         u32 elapsed_ms = (now - req->submit_us) / 1000U;
         if (elapsed_ms < limit_ms)
             continue;
@@ -284,7 +289,7 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
         {
             Kprintf("[nvme] abort cmd itself timed out: tag=%lu — reset\n",
                     (ULONG)req->tag);
-            Signal(ctrl->task, 1UL << ctrl->reset_signal);
+            Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
             return;
         }
 
@@ -300,8 +305,8 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
             continue;
         }
 
-        req->flags    |= NVME_REQ_ABORT_SENT;
-        req->abort_us  = now;
+        req->flags |= NVME_REQ_ABORT_SENT;
+        req->abort_us = now;
     }
 }
 
@@ -333,7 +338,7 @@ void nvme_tick_watchdog(struct NVMeController *ctrl)
     while ((next = node->mln_Succ) != NULL)
     {
         struct nvme_request *req = (struct nvme_request *)node;
-        node = next;            /* advance BEFORE Remove/submit */
+        node = next; /* advance BEFORE Remove/submit */
 
         if ((s32)(now - req->deadline_us) < 0)
             continue;
