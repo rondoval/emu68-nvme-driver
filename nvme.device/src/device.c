@@ -23,6 +23,7 @@
 
 #include <device.h>
 #include <config.h>
+#include <nvme/nvme_probe.h>
 #include <mounter.h>
 
 /*

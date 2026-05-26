@@ -23,18 +23,13 @@
 #include <proto/exec.h>
 #endif
 
-#include <minlist.h>
 #include <debug.h>
-#include <iomem.h>
-#include <memory.h> /* dma_zalloc / dma_free / pool_zalloc / pool_free */
 #include <timing.h>
 
 #include <device.h>
-#include <config.h>
 #include <nvme/nvme_io.h>
-#include <nvme/nvme_request.h>
-#include <nvme/nvme.h>       /* nvme_complete_rq */
-#include <nvme/nvme_linux.h> /* struct nvme_completion, NVME_REG_DBS */
+#include <nvme/nvme_admin.h> /* nvme_send_abort_async, nvme_submit_sync_cmd */
+#include <nvme/nvme_queue.h>
 
 #define NVME_IO_QID 1 /* sole I/O queue ID (we create one pair) */
 
@@ -178,7 +173,7 @@ static void drain_cq(struct nvme_queue *q)
         {
             req->status = status;
             req->result = cqe->result;
-            q->inflight[cid] = NULL;
+            nvme_inflight_release(q, cid);
             KprintfH("[nvme] CQE: qid=%lu head=%lu cid=%lu status=0x%04lx phase=%lu → completing %s\n",
                      (ULONG)q->qid, (ULONG)head, (ULONG)cid,
                      (ULONG)status, (ULONG)cqe_phase,
@@ -491,4 +486,179 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
 fail:
     nvme_teardown_queue(&ctrl->io_q);
     return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Cancel walkers + freeze/quiesce gates                              */
+/* ------------------------------------------------------------------ */
+
+/*
+ * nvme_cancel_request - force-complete a single in-flight request.
+ *
+ * Marks @req NVME_SC_HOST_ABORTED_CMD + NVME_REQ_CANCELLED and routes it
+ * through nvme_complete_rq so any blocked waiter / IOStdReq unblocks
+ * without waiting for a real CQE.  Used both directly and as the
+ * per-slot action inside nvme_flush_queue_inflight().
+ */
+void nvme_cancel_request(struct nvme_request *req)
+{
+    Kprintf("[nvme] cancel: tag %lu\n", (ULONG)req->tag);
+    req->status = NVME_SC_HOST_ABORTED_CMD;
+    req->flags |= NVME_REQ_CANCELLED;
+    nvme_complete_rq(req);
+}
+
+/*
+ * nvme_flush_queue_inflight - cancel every in-flight request on @q.
+ *
+ * Walks the full inflight[] table releasing each slot (which keeps
+ * inflight_count / aer_inflight accurate) and force-completing the
+ * request via nvme_cancel_request.  Called during controller reset
+ * and unprobe to drain a queue before its rings are torn down.
+ */
+void nvme_flush_queue_inflight(struct nvme_queue *q)
+{
+    if (!q || !q->inflight)
+        return;
+    for (u16 i = 0; i < q->depth; i++)
+    {
+        struct nvme_request *req = q->inflight[i];
+        if (req)
+        {
+            nvme_inflight_release(q, i);
+            nvme_cancel_request(req);
+        }
+    }
+}
+
+/*
+ * nvme_start_freeze - hold off new I/O dispatch for an exclusive command.
+ *
+ * Linux freezes per-namespace block-mq queues so new requests sit at the
+ * block layer.  Amiga has no block layer; the equivalent gate is the
+ * unit task's msgPort drain (see unit_task.c) which skips when
+ * NVME_CTRL_FROZEN is set.  In-flight commands on the SQ continue.
+ *
+ * Pair with nvme_wait_freeze() to block until in-flight drains, then
+ * with nvme_unfreeze() to release.
+ */
+void nvme_start_freeze(struct NVMeController *ctrl)
+{
+    if (!ctrl)
+        return;
+    if (!test_and_set_bit(NVME_CTRL_FROZEN, &ctrl->flags))
+        Kprintf("[nvme] %s: I/O queues freezing\n", __func__);
+}
+
+/*
+ * nvme_wait_freeze - block until the I/O queue has drained.
+ *
+ * Admin queue is intentionally not waited on: passthrough's own admin
+ * command issues there while frozen, and the persistent AER would
+ * otherwise prevent ever reaching zero.
+ *
+ * MUST NOT be called from ctrl->unit_task — would deadlock waiting for
+ * completions that only the unit task processes.  Passthrough runs on
+ * AdminWorker (scan-worker model), so polling via delay_ms() is safe.
+ */
+void nvme_wait_freeze(struct NVMeController *ctrl)
+{
+    if (!ctrl)
+        return;
+    while (ctrl->io_q.inflight_count > 0)
+        delay_ms(10);
+}
+
+/*
+ * nvme_unfreeze - release the freeze gate and kick the unit task to
+ * drain any IOStdReqs that piled up on msgPort during the freeze.
+ */
+void nvme_unfreeze(struct NVMeController *ctrl)
+{
+    if (!ctrl)
+        return;
+    if (!test_and_clear_bit(NVME_CTRL_FROZEN, &ctrl->flags))
+        return;
+    Kprintf("[nvme] %s: I/O queues unfrozen\n", __func__);
+    if (ctrl->unit_task)
+        Signal(ctrl->unit_task, 1UL << ctrl->msgPort->mp_SigBit);
+}
+
+/*
+ * nvme_quiesce_io_queues - stop dispatching new I/O to the controller.
+ *
+ * Amiga has no blk-mq tagset; the moral equivalent is to stop draining
+ * ctrl->msgPort in the unit task's wait loop.  Incoming BeginIO traffic
+ * sits in the message port until nvme_unquiesce_io_queues releases it.
+ * In-flight commands (already on the SQ) are not disturbed — they
+ * continue to complete via the normal CQE path.
+ *
+ * Idempotent: a second call while already quiesced is a no-op.
+ */
+void nvme_quiesce_io_queues(struct NVMeController *ctrl)
+{
+    if (!ctrl)
+        return;
+    if (!test_and_set_bit(NVME_CTRL_STOPPED, &ctrl->flags))
+        Kprintf("[nvme] %s: I/O queues quiesced\n", __func__);
+}
+
+/*
+ * nvme_unquiesce_io_queues - resume I/O dispatch after a quiesce.
+ *
+ * Clears NVME_CTRL_STOPPED and self-signals the unit task on the
+ * msgPort signal bit so the wait loop drains any messages that
+ * accumulated during the quiesce (the Exec msgPort signal would
+ * normally only fire on a fresh PutMsg).
+ *
+ * No-op if not currently quiesced.
+ */
+void nvme_unquiesce_io_queues(struct NVMeController *ctrl)
+{
+    if (!ctrl)
+        return;
+    if (!test_and_clear_bit(NVME_CTRL_STOPPED, &ctrl->flags))
+        return;
+    Kprintf("[nvme] %s: I/O queues unquiesced\n", __func__);
+
+    if (ctrl->unit_task)
+        Signal(ctrl->unit_task, 1UL << ctrl->msgPort->mp_SigBit);
+}
+
+/*
+ * nvme_quiesce_admin_queue - stop draining ctrl->adminPort.
+ *
+ * Mirror of nvme_quiesce_io_queues for the admin path: sets
+ * NVME_CTRL_ADMIN_Q_STOPPED so AdminWorker leaves new passthrough
+ * IOCTLs queued in adminPort instead of dispatching them.  Internal
+ * async admin submits (AER re-arm, watchdog-issued Aborts) keep
+ * working — those are called from controller-owned contexts that
+ * are already serialised against reset by running on unit_task.
+ *
+ * Idempotent.
+ */
+void nvme_quiesce_admin_queue(struct NVMeController *ctrl)
+{
+    if (!ctrl)
+        return;
+    if (!test_and_set_bit(NVME_CTRL_ADMIN_Q_STOPPED, &ctrl->flags))
+        Kprintf("[nvme] %s: admin queue quiesced\n", __func__);
+}
+
+/*
+ * nvme_unquiesce_admin_queue - resume admin port dispatch.
+ *
+ * Clears NVME_CTRL_ADMIN_Q_STOPPED and self-signals AdminWorker on
+ * the adminPort signal bit so the wait loop drains any IOCTLs that
+ * accumulated during the quiesce.  No-op if not currently quiesced.
+ */
+void nvme_unquiesce_admin_queue(struct NVMeController *ctrl)
+{
+    if (!ctrl)
+        return;
+    if (!test_and_clear_bit(NVME_CTRL_ADMIN_Q_STOPPED, &ctrl->flags))
+        return;
+    Kprintf("[nvme] %s: admin queue unquiesced\n", __func__);
+    if (ctrl->admin_task && ctrl->adminPort)
+        Signal(ctrl->admin_task, 1UL << ctrl->adminPort->mp_SigBit);
 }
