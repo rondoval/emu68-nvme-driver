@@ -208,8 +208,17 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
         base->probed = TRUE;
     }
 
-    /* Look up the pre-allocated unit by its global unit number */
+    /* Look up the pre-allocated unit by its global unit number.
+     * Forbid around the walk: AdminWorker may concurrently add (rescan
+     * discovered a new namespace) or remove (namespace went away) nodes
+     * via nvme_alloc_nvmeunit / nvme_ns_remove — both mutate base->units
+     * under their own Forbid.  No need to hold past the walk: extracting
+     * a pointer is safe because the unit struct outlives the list
+     * membership (deferred-free at controller expunge), and any
+     * subsequent state change is gated by NVME_UNIT_DEAD which UnitOpen
+     * re-checks. */
     struct NVMeUnit *unit = NULL;
+    Forbid();
     for (struct MinNode *n = base->units.mlh_Head; n->mln_Succ != NULL; n = n->mln_Succ)
     {
         struct NVMeUnit *u = (struct NVMeUnit *)n;
@@ -219,6 +228,7 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
             break;
         }
     }
+    Permit();
 
     if (unit == NULL)
     {

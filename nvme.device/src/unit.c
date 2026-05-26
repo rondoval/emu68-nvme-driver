@@ -38,6 +38,15 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
         return ERR_CONTROLLER_ERROR;
     }
 
+    /* Belt-and-suspenders: nvme_ns_remove unlinks dead units from
+     * base->units so openLib's walk won't find them, but a holder that
+     * obtained the pointer some other way still funnels through here. */
+    if (unit->flags & NVME_UNIT_DEAD) {
+        Kprintf("[nvme] %s: unit %ld is dead (namespace removed)\n",
+                __func__, unitNumber);
+        return ERR_CONTROLLER_ERROR;
+    }
+
     unit->flags = flags;
     unit->unit.unit_OpenCnt++;
     ctrl->openUnits++;

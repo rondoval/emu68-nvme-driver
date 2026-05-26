@@ -143,6 +143,16 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
     KprintfH("[nvme] beginIO: cmd=0x%04lx unit=%ld io_Length=%lu io_Actual=%lu\n",
              (ULONG)io->io_Command, unit->unitNumber, io->io_Length, io->io_Actual);
 
+    /* Namespace went away under us — refuse new I/O.  Set TDERR_DiskChanged
+     * (standard trackdisk "media gone" reply) so filesystems mark the volume
+     * not-ready instead of retrying forever. */
+    if (unit->flags & NVME_UNIT_DEAD) {
+        io->io_Error = TDERR_DiskChanged;
+        if (!(io->io_Flags & IOF_QUICK))
+            ReplyMsg((struct Message *)io);
+        return;
+    }
+
     switch (io->io_Command)
     {
     case TD_MOTOR: /* NVMe drives have no spindle motor; always report success */

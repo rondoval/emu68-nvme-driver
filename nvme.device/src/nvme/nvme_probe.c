@@ -37,7 +37,7 @@
 #include <nvme/nvme_log.h>   /* nvme_init_identify */
 #include <nvme/nvme_probe.h>
 #include <nvme/nvme_queue.h> /* nvme_setup_admin_queue, nvme_setup_io_queue, nvme_unquiesce_io_queues */
-#include <nvme/nvme_scan.h>  /* nvme_scan_work */
+#include <nvme/nvme_scan.h>  /* nvme_scan_namespaces */
 
 /* NVMe PCI class code: Mass Storage / NVM Express (base 0x01, sub 0x08, prog-if 0x02) */
 #define NVME_PCI_CLASS 0x010802UL
@@ -336,7 +336,7 @@ static int nvme_disable_ctrl(struct NVMeController *ctrl, BOOL shutdown)
  * nvme_reset_controller (reset recovery) — both immediately after
  * nvme_change_ctrl_state(NVME_CTRL_LIVE).  Each caller follows with
  * the namespace scan flavor appropriate to its task context:
- *   - probe runs on a foreign task → nvme_scan_work (sync, units
+ *   - probe runs on a foreign task → nvme_scan_namespaces (sync, units
  *     visible before probe returns so openLib can find them).
  *   - reset runs on the unit task  → nvme_queue_scan (async, spawns
  *     a fresh ScanWorker; sync admin from the unit task deadlocks).
@@ -473,7 +473,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
      * Sync call: probe runs on a foreign task, and units must be
      * visible in base->units before nvme_probe_all returns so
      * subsequent openLib calls can find them. */
-    nvme_scan_work(ctrl);
+    nvme_scan_namespaces(ctrl);
     KprintfH("[nvme] %s: namespace scan complete\n", __func__);
 
     Kprintf("[nvme] %s: controller %lx fully brought up\n",
@@ -524,12 +524,17 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
     unit->ctrl = ctrl;
     unit->device = base;
     unit->nsid = nsid;
-    unit->unitNumber = (LONG)(base->nextUnitNumber++);
     unit->blockSize = blockSize;
     unit->blockShift = blockShift;
     unit->logicalSectors = logicalSectors;
 
+    /* base->units is walked lockless by openLib (device.c) and now mutated
+     * from the rescan path too — Forbid around the unit-number assignment
+     * and link so a concurrent walker never observes a half-linked node. */
+    Forbid();
+    unit->unitNumber = (LONG)(base->nextUnitNumber++);
     AddTailMinList(&base->units, (struct MinNode *)unit);
+    Permit();
 
     Kprintf("[nvme] %s: unit %ld NSID %lu blockSize=%lu blocks=%lu\n", __func__,
             unit->unitNumber, (ULONG)nsid, blockSize, (ULONG)logicalSectors);
@@ -742,7 +747,7 @@ void nvme_reset_controller(struct NVMeController *ctrl)
 
     /* Re-arm AEN and release the I/O msgPort.  Reset runs on the unit
      * task, so we MUST defer the rescan via nvme_queue_scan (signals
-     * the unit task to spawn a ScanWorker); a sync nvme_scan_work
+     * the unit task to spawn a ScanWorker); a sync nvme_scan_namespaces
      * here would deadlock on its own admin completions. */
     nvme_start_ctrl(ctrl);
     nvme_queue_scan(ctrl);

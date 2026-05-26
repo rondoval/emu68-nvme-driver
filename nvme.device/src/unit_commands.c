@@ -63,6 +63,16 @@ void ProcessCommand(struct IOStdReq *io)
 {
     struct NVMeUnit *unit = (struct NVMeUnit *)io->io_Unit;
 
+    /* Race-close: a BeginIO that passed its NVME_UNIT_DEAD check, was
+     * PutMsg'd, and then the unit got marked dead before we picked the
+     * message up.  Re-check here so the gone-namespace I/O fails cleanly
+     * instead of dispatching to a controller that no longer has the NSID. */
+    if (unit->flags & NVME_UNIT_DEAD) {
+        io->io_Error = TDERR_DiskChanged;
+        ReplyMsg((struct Message *)io);
+        return;
+    }
+
     /*
      * Save the high 32 bits of the byte offset BEFORE zeroing io_Actual.
      * 64-bit commands (TD_READ64, NSCMD_TD_READ64, NSCMD_ETD_READ64, …)
