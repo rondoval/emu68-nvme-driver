@@ -9,21 +9,10 @@
  * the controller has another outstanding slot to report the next event)
  * happens by calling nvme_submit_aer() directly from the aer_done callback.
  */
-#include <nvme/nvme.h> /* must come first */
-
-#include <string.h>
-
-#include <types.h>
-#include <errors.h>
-
-#include <memory.h> /* mem_zero, pool_free */
-
-#include <device.h>
 #include <nvme/nvme_admin.h> /* nvme_set_features, nvme_submit_async_cmd */
 #include <nvme/nvme_aen.h>
 #include <nvme/nvme_ctrl.h>	   /* nvme_change_ctrl_state */
 #include <nvme/nvme_kpool.h>   /* nvme_queue_scan, nvme_queue_fw_act_work, nvme_reset_ctrl */
-#include <nvme/nvme_request.h> /* NVME_REQ_AER, struct nvme_request */
 
 /*
  * nvme_aer_type - extract the AER type from an AEN completion result

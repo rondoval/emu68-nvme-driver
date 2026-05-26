@@ -41,6 +41,7 @@ add_executable(nvme.device
     src/device_abortio.c
     src/unit.c
     src/unit_task.c
+    src/admin_task.c
     src/irq.c
     src/unit_commands.c
     src/unit_commands_scsi.c
