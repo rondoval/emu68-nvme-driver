@@ -50,6 +50,7 @@ add_executable(nvme.device
     src/nvme/nvme_queue.c
     src/nvme/nvme_hmb.c
     src/nvme/nvme_constants.c
+    src/nvme/nvme_passthru.c
     src/nvme/nvme_aen.c
     src/nvme/nvme_scan.c
     mounter/mounter.c
