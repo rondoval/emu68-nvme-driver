@@ -96,8 +96,23 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
         goto fail_inflight;
     }
 
+    q->free_stack = pool_zalloc(ctrl->memoryPool, (ULONG)depth * sizeof(u16));
+    if (!q->free_stack)
+    {
+        Kprintf("[nvme] %s: free-stack alloc (%lu B) failed\n", __func__,
+                (ULONG)depth * sizeof(u16));
+        goto fail_free_stack;
+    }
+    /* Push every CID onto the free stack in reverse so the first pop
+     * returns CID 0 (low-numbered tags first — friendlier for tracing). */
+    for (u16 i = 0; i < depth; i++)
+        q->free_stack[i] = (u16)(depth - 1 - i);
+    q->free_top = depth;
+
     return 0;
 
+fail_free_stack:
+    pool_free(ctrl->memoryPool, q->inflight);
 fail_inflight:
     dma_free(ctrl->memoryPool, q->cq);
 fail_cq:
@@ -130,6 +145,8 @@ void nvme_teardown_queue(struct nvme_queue *q)
             dma_free(pool, q->cq);
         if (q->inflight)
             pool_free(pool, q->inflight);
+        if (q->free_stack)
+            pool_free(pool, q->free_stack);
     }
 
     mem_zero(q, sizeof(*q));
@@ -339,7 +356,7 @@ void nvme_tick_watchdog(struct NVMeController *ctrl)
             continue;
 
         Remove((struct Node *)&req->node);
-        (void)nvme_submit_io(req);
+        (void)nvme_resubmit_io(req);
     }
 }
 
