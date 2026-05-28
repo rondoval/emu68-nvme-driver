@@ -43,6 +43,14 @@ enum nvme_req_flags
                                      * Request; sits in admin
                                      * inflight[] indefinitely.  The
                                      * watchdog must skip it. */
+    NVME_REQ_PRP_SLAB = (1 << 5),   /* prp_pages[] are slab-backed
+                                     * (free with slab_free).  Set
+                                     * alongside NVME_REQ_PRP_LIST by
+                                     * build_prps.  When clear, the
+                                     * prp_pages[] were dma_alloc'd
+                                     * by the caller (e.g. DSM range
+                                     * buffer in nvme_setup_dsm) and
+                                     * must use dma_free. */
 };
 
 /*

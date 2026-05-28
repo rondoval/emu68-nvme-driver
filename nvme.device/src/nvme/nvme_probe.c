@@ -381,6 +381,18 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         goto fail_hw;
     }
 
+    /* Hot-path slab caches.  Capacities sized to amortise per-grow
+     * dma_alloc cost against worst-case in-flight working set:
+     *   req_slab      — 64 per grow (peak ≈ IOQD 256 + admin 16).
+     *   ctx_slab      — 16 per grow (chunked-I/O parent contexts).
+     *   prp_page_slab — 16 per grow (≤8 list pages × NVME_MAX_INFLIGHT_PER_IO). */
+    slab_cache_init(&ctrl->req_slab, ctrl->memoryPool,
+                    sizeof(struct nvme_request), 0, 64);
+    slab_cache_init(&ctrl->ctx_slab, ctrl->memoryPool,
+                    sizeof(struct nvme_io_context), 0, 16);
+    slab_cache_init(&ctrl->prp_page_slab, ctrl->memoryPool,
+                    NVME_CTRL_PAGE_SIZE, NVME_CTRL_PAGE_SIZE, 16);
+
     ret = task_spawn(ctrl, UnitTask, "NVMe storage driver");
     if (ret != ERR_NO_ERROR)
     {
@@ -491,6 +503,9 @@ fail_admin_task:
 fail_unit_task:
     task_join(&ctrl->unit_task);
 fail_pool:
+    slab_cache_destroy(&ctrl->prp_page_slab);
+    slab_cache_destroy(&ctrl->ctx_slab);
+    slab_cache_destroy(&ctrl->req_slab);
     DeletePool(ctrl->memoryPool);
     ctrl->memoryPool = NULL;
 fail_hw:
@@ -655,6 +670,9 @@ void nvme_unprobe_all(struct NVMeDevice *base)
                 pool_free(ctrl->memoryPool, ctrl->effects);
                 ctrl->effects = NULL;
             }
+            slab_cache_destroy(&ctrl->prp_page_slab);
+            slab_cache_destroy(&ctrl->ctx_slab);
+            slab_cache_destroy(&ctrl->req_slab);
             DeletePool(ctrl->memoryPool);
             ctrl->memoryPool = NULL;
         }

@@ -318,7 +318,7 @@ void nvme_complete_rq(struct nvme_request *req)
 
 			ctx->completed += req->user_len;
 			ctx->inflight--;
-			pool_free(req->ac->memoryPool, req);
+			slab_free(&req->ac->req_slab, req);
 
 			/* Refill the slot if there's more to dispatch and no
 			 * sibling has failed yet — once first_error is latched
@@ -344,7 +344,7 @@ void nvme_complete_rq(struct nvme_request *req)
 		 *    We MUST NOT free here.
 		 *  - I/O (req->io != NULL): the originating IOStdReq has just
 		 *    been ReplyMsg'd by nvme_end_req; the request is ours to
-		 *    free.  pool_free via req->ac.
+		 *    free.  slab_free via req->ac.
 		 *  - Otherwise: skip. */
 		if (req->done || req->waiter)
 		{
@@ -352,7 +352,7 @@ void nvme_complete_rq(struct nvme_request *req)
 		}
 		else if (req->io && req->ac)
 		{
-			pool_free(req->ac->memoryPool, req);
+			slab_free(&req->ac->req_slab, req);
 		}
 
 		return;

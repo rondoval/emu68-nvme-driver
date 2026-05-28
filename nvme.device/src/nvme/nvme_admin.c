@@ -24,7 +24,7 @@
 #include <device.h>
 #include <nvme/nvme.h>
 #include <nvme/nvme_admin.h>
-#include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_init_request, nvme_req_submit, nvme_req_destroy */
+#include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_req_submit, nvme_req_destroy */
 #include <nvme/nvme_queue.h> /* nvme_alloc_tag, nvme_inflight_claim */
 
 /* ---------------------------------------------------------------- *
@@ -45,7 +45,7 @@ static struct nvme_request *nvme_req_alloc_admin(struct NVMeController *ctrl,
 {
     struct nvme_queue *q = &ctrl->admin_q;
 
-    struct nvme_request *req = pool_zalloc(ctrl->memoryPool, sizeof(*req));
+    struct nvme_request *req = slab_zalloc(&ctrl->req_slab);
     if (!req)
     {
         *err_out = -ENOMEM;
@@ -55,7 +55,7 @@ static struct nvme_request *nvme_req_alloc_admin(struct NVMeController *ctrl,
     u16 tag = nvme_alloc_tag(q);
     if (tag == 0xFFFF)
     {
-        pool_free(ctrl->memoryPool, req);
+        slab_free(&ctrl->req_slab, req);
         *err_out = -EBUSY;
         return NULL;
     }
@@ -65,6 +65,23 @@ static struct nvme_request *nvme_req_alloc_admin(struct NVMeController *ctrl,
     req->tag = tag;
     nvme_inflight_claim(q, tag, req);
     return req;
+}
+
+/*
+ * nvme_init_request - stage a caller-supplied nvme_command into @req.
+ *
+ * Clears any SGL flags the caller left on @cmd (this driver always
+ * uses PRPs), scrubs status/retries/flags, and copies the embedded
+ * command.  Called from both submit primitives below so every admin
+ * code path goes through the same SGL-flag mask.
+ */
+static void nvme_init_request(struct nvme_request *req, struct nvme_command *cmd)
+{
+    cmd->common.flags = (u8)(cmd->common.flags & (u8)~NVME_CMD_SGL_ALL);
+    req->status  = 0;
+    req->retries = 0;
+    req->flags   = 0;
+    req->cmd     = *cmd;   /* embedded copy */
 }
 
 /*
@@ -196,7 +213,7 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
         *result = req->result;
 
     FreeSignal(signal_bit);
-    pool_free(ctrl->memoryPool, req);
+    slab_free(&ctrl->req_slab, req);
     return status;
 }
 
@@ -209,7 +226,7 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
  * already written to req->status / req->result.
  *
  * Ownership: on success the callback owns the request — it must
- * pool_free(req->ac->memoryPool, req) and FreeMem (or equivalent)
+ * slab_free(&req->ac->req_slab, req) and FreeMem (or equivalent)
  * any data buffer it staged.  On synchronous submit failure
  * (return < 0) the request is already destroyed and @done is NOT
  * called.
@@ -285,7 +302,7 @@ static void abort_done(struct nvme_request *req)
              (ULONG)le16(req->cmd.abort.sqid),
              (ULONG)le16(req->cmd.abort.cid),
              (ULONG)req->status);
-    pool_free(req->ac->memoryPool, req);
+    slab_free(&req->ac->req_slab, req);
 }
 
 /*
@@ -437,7 +454,7 @@ int nvme_configure_timestamp(struct NVMeController *ctrl)
     if (!(ctrl->oncs & NVME_CTRL_ONCS_TIMESTAMP))
         return 0;
 
-    __le64 ts = le64(ktime_to_ms(ktime_get_real()));
+    __le64 ts __attribute__((aligned(4))) = le64(ktime_to_ms(ktime_get_real()));
     int ret = nvme_set_features(ctrl, NVME_FEAT_TIMESTAMP, 0, &ts, sizeof(ts), NULL);
     if (ret)
         Kprintf("[nvme] %s: could not set timestamp (%ld)\n", __func__, ret);

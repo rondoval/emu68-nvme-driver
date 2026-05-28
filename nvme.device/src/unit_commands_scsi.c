@@ -26,6 +26,7 @@
 #include <memory.h>
 
 #include <device.h>
+#include <nvme/nvme.h> /* NVME_CTRL_PAGE_SIZE */
 #include <nvme/nvme_io.h>
 
 /* ------------------------------------------------------------------ */
@@ -439,7 +440,7 @@ static BYTE scsi_inquiry_vpd_b2(struct NVMeUnit *unit,
 
     /* byte 5 bits: LBPU(7) LBPWS(6) LBPWS10(5) LBPRZ(2) ANC_SUP(1) DP(0)
      * Only set LBPU when DSM is supported. */
-    //TODO implement LBPWS LBPRZ
+    // TODO implement LBPWS LBPRZ
     if (unit_supports_dsm(unit))
         page[5] = 0x80; /* LBPU = 1 */
 
@@ -787,9 +788,20 @@ static BYTE scsi_unmap(struct NVMeUnit *unit, struct IOStdReq *io)
         return IOERR_BADLENGTH;
     }
 
-    /* Build the NVMe range list on the stack.
-     * nvme_io_submit_dsm copies it into a DMA-aligned buffer before submission. */
-    struct nvme_dsm_range stack_ranges[NVME_DSM_MAX_RANGES];
+    /* Allocate the DMA buffer up front and fill it in place; the slots
+     * past nr_ranges remain zero (dma_zalloc) which the device-quirk
+     * note in nvme_setup_dsm requires.  nvme_io_submit_dsm takes
+     * ownership unconditionally — we must not touch @ranges after the
+     * call, including on the err != ASYNC path. */
+    struct nvme_dsm_range *ranges =
+        dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE,
+                   sizeof(*ranges) * NVME_DSM_MAX_RANGES);
+    if (!ranges)
+    {
+        scsi_make_sense(cmd, 0, 0, IOERR_SELFTEST);
+        return IOERR_SELFTEST;
+    }
+
     UBYTE *desc = param + 8;
     for (UWORD i = 0; i < nr_ranges; i++, desc += 16)
     {
@@ -802,16 +814,17 @@ static BYTE scsi_unmap(struct NVMeUnit *unit, struct IOStdReq *io)
             Kprintf("[nvme] %s: range[%lu] LBA 0x%08lx%08lx + %lu blocks exceeds disk\n",
                     __func__, (ULONG)i,
                     (ULONG)(slba >> 32), (ULONG)slba, blocks);
+            dma_free(ctrl->memoryPool, ranges);
             scsi_make_sense(cmd, 0, 0, IOERR_BADADDRESS);
             return IOERR_BADADDRESS;
         }
 
-        stack_ranges[i].cattr = le32(0);
-        stack_ranges[i].nlb = le32(blocks);
-        stack_ranges[i].slba = le64(slba);
+        ranges[i].cattr = le32(0);
+        ranges[i].nlb = le32(blocks);
+        ranges[i].slba = le64(slba);
     }
 
-    BYTE err = nvme_io_submit_dsm(unit, io, stack_ranges, nr_ranges);
+    BYTE err = nvme_io_submit_dsm(unit, io, ranges, nr_ranges);
     if (err != NVME_IO_ASYNC)
     {
         scsi_make_sense(cmd, 0, 0, err);

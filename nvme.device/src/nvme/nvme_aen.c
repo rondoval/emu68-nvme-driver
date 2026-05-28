@@ -208,7 +208,7 @@ static void aer_done(struct nvme_request *req)
 
 	nvme_complete_async_event(ctrl, status, &req->result);
 
-	pool_free(ctrl->memoryPool, req);
+	slab_free(&ctrl->req_slab, req);
 
 	/* Re-arm: submit the next AER inline.  Persistent-error events
 	 * trigger a reset instead — the reset path re-arms via nvme_start_ctrl. */
