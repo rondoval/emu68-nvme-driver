@@ -28,7 +28,7 @@
 
 #include <device.h>
 #include <nvme/nvme_io.h>
-#include <nvme/nvme_admin.h> /* nvme_send_abort_async, nvme_submit_sync_cmd */
+#include <nvme/nvme_admin.h> /* nvme_abort_request, nvme_submit_sync_cmd */
 #include <nvme/nvme_queue.h>
 
 #define NVME_IO_QID 1 /* sole I/O queue ID (we create one pair) */
@@ -310,7 +310,7 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
                 (ULONG)q->qid, (ULONG)req->tag,
                 (ULONG)req->cmd.common.opcode, (ULONG)elapsed_ms);
 
-        if (nvme_send_abort_async(ctrl, q->qid, req->tag) != 0)
+        if (nvme_abort_request(ctrl, req) != 0)
         {
             Kprintf("[nvme] failed to submit Abort for qid=%lu tag=%lu\n",
                     (ULONG)q->qid, (ULONG)req->tag);

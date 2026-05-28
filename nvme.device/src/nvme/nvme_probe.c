@@ -650,6 +650,11 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         hw_shutdown(ctrl);
         if (ctrl->memoryPool)
         {
+            if (ctrl->effects)
+            {
+                pool_free(ctrl->memoryPool, ctrl->effects);
+                ctrl->effects = NULL;
+            }
             DeletePool(ctrl->memoryPool);
             ctrl->memoryPool = NULL;
         }

@@ -4,7 +4,7 @@
 
 /*
  * Stringification of NVMe completion statuses and opcodes — used by the
- * error-logging path in nvme_request.c.  Implementations live in
+ * error-logging path in nvme_completion.c.  Implementations live in
  * nvme_constants.c (large switch tables).
  */
 const char *nvme_get_error_status_str(u16 status);
