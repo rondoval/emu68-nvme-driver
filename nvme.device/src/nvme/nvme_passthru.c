@@ -146,6 +146,19 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
              (ULONG)io->io_Command, (ULONG)uc->pt_Opcode,
              (ULONG)uc->pt_Nsid, (ULONG)uc->pt_DataLen);
 
+    /* Readiness gate.  Passthrough is a USERCMD on the admin queue: only
+     * safe when the controller is fully LIVE.  During CONNECTING/RESETTING
+     * the admin queue is carrying init traffic that user commands must
+     * not race; during DELETING/DEAD the controller is gone. */
+    enum nvme_ctrl_state state = nvme_ctrl_state(ctrl);
+    if (state != NVME_CTRL_LIVE) {
+        BOOL terminal = nvme_state_terminal(ctrl);
+        Kprintf("[nvme] passthru: ctrl not LIVE (state=%ld) — rejecting %s\n",
+                (LONG)state, terminal ? "terminally" : "transiently");
+        reply_passthru(io, IOERR_UNITBUSY);
+        return;
+    }
+
     BOOL is_io = (io->io_Command == NSCMD_NVME_IO_PASS);
 
     /* I/O passthrough not yet supported — needs a sync-submit helper
