@@ -2,6 +2,8 @@
 #ifndef NVME_CONSTANTS_H
 #define NVME_CONSTANTS_H
 
+#include <nvme/nvme_core.h>     /* u16, u8 */
+
 /*
  * Stringification of NVMe completion statuses and opcodes — used by the
  * error-logging and debug-trace paths throughout the driver.  Implementations

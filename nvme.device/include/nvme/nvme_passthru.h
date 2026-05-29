@@ -2,7 +2,8 @@
 #ifndef NVME_PASSTHRU_H
 #define NVME_PASSTHRU_H
 
-#include <exec/io.h>
+struct NVMeController;
+struct IOStdReq;
 
 /*
  * nvme_passthru_process - run one NVMe admin passthrough IOStdReq to completion.

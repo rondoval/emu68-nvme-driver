@@ -2,6 +2,53 @@
 #ifndef NVME_IDENTIFY_H
 #define NVME_IDENTIFY_H
 
+#include <nvme/nvme_core.h>     /* integer types, BOOL, nvme_defs.h (NVME_VS, __le32) */
+#include <nvme/nvme_ctrl.h>     /* struct NVMeController, enum nvme_quirks (nvme_id_cns_ok) */
+
+struct NVMeUnit;
+
+/*
+ * Container structure for uniqueue namespace identifiers.
+ */
+struct nvme_ns_ids {
+	u8	eui64[8];
+	u8	nguid[16];
+	u8	uuid[16];
+	u8	csi;
+};
+
+enum nvme_ns_features {
+	NVME_NS_DEAC = 1 << 2,		/* DEAC bit in Write Zeroes supported */
+};
+
+struct nvme_ns {
+	struct MinNode mn_Node;
+
+	struct NVMeController *ctrl;
+	u32 ns_id;
+	u8 lba_shift;
+	u64 disk_capacity_sectors;
+	struct NVMeUnit *unit;
+
+	/* metadata / end-to-end-protection characteristics of the active LBA
+	 * format, cached from Identify Namespace (+ Identify NS NVM under ELBAS)
+	 * for future metadata/PI support */
+	u16 ms;			/* metadata bytes per LBA			*/
+	u8 pi_type;		/* protection-information type (0 = none)	*/
+	u8 pic;			/* protection-information capabilities (ELBAS)	*/
+	u32 elbaf;		/* active extended LBA format word (ELBAS)	*/
+	u64 lbstm;		/* LBA storage-tag mask (ELBAS)			*/
+
+	struct nvme_ns_ids ids;
+	enum nvme_ns_features features;
+
+	struct nvme_effects_log *effects;   /* Stage 8 stub */
+
+	unsigned long flags;
+#define NVME_NS_REMOVING		0
+#define NVME_NS_READY			4
+};
+
 /*
  * struct nvme_ns_info - namespace-info descriptor passed between the
  * identify builders here and the scan path in nvme_scan.c.

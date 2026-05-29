@@ -2,6 +2,13 @@
 #ifndef NVME_COMPLETION_H
 #define NVME_COMPLETION_H
 
+#include <nvme/nvme_core.h>     /* nvme_defs.h: struct nvme_command, union nvme_result */
+
+struct NVMeController;
+struct NVMeUnit;
+struct nvme_queue;
+struct IOStdReq;
+
 /*
  * Parent struct for a single Amiga BeginIO whose payload is larger than
  * the controller MDTS and is therefore split across multiple sibling

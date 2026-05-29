@@ -2,6 +2,10 @@
 #ifndef NVME_AEN_H
 #define NVME_AEN_H
 
+#include <nvme/nvme_core.h>     /* nvme_defs.h: NVME_AEN_CFG_* */
+
+struct NVMeController;
+
 /*
  * Default set of Asynchronous Event Configuration bits we ask the
  * controller to report.  AND with ctrl->oaes before passing to

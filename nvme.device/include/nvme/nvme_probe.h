@@ -2,10 +2,10 @@
 #ifndef NVME_PROBE_H
 #define NVME_PROBE_H
 
-#include <types.h>
+#include <nvme/nvme_core.h>     /* s32, ULONG, u8, u64 */
 
-struct NVMeController;
 struct NVMeDevice;
+struct NVMeController;
 struct NVMeUnit;
 
 /* ------------------------------------------------------------------ */

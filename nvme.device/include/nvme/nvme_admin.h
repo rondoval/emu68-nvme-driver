@@ -2,8 +2,10 @@
 #ifndef NVME_ADMIN_H
 #define NVME_ADMIN_H
 
-#include "nvme_core.h"                /* size_t typedef, NVMeController, nvme_command,
-                                    nvme_result, nvme_request, nvme_req_flags */
+#include <nvme/nvme_core.h>     /* size_t, nvme_defs.h (struct nvme_command, union nvme_result) */
+
+struct NVMeController;
+struct nvme_request;
 
 /*
  * nvme_io_abort - submit Abort admin cmd(s) for an in-flight I/O.
@@ -74,7 +76,7 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
 int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
 			  void *buffer, u32 buflen,
 			  void (*done)(struct nvme_request *req), void *priv,
-			  enum nvme_req_flags req_flags);
+			  unsigned int req_flags);
 
 /*
  * nvme_set_features - issue a Set Features admin command.

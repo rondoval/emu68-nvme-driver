@@ -2,6 +2,8 @@
 #ifndef NVME_HMB_H
 #define NVME_HMB_H
 
+struct NVMeController;
+
 /*
  * Host Memory Buffer setup and teardown.  See src/nvme/nvme_hmb.c
  * for the implementation notes.

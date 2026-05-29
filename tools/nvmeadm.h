@@ -18,6 +18,7 @@
 
 #include <format.h>
 #include <memory.h>
+#include <bits.h>
 #include <nvme/nvme_defs.h>
 
 extern struct ExecBase *SysBase;

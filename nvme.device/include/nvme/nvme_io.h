@@ -2,7 +2,13 @@
 #ifndef NVME_IO_H
 #define NVME_IO_H
 
+#include <nvme/nvme_core.h>     /* BOOL, u64, ULONG, u8 */
+
+struct nvme_dsm_range;
 struct nvme_io_context;
+struct nvme_request;
+struct NVMeUnit;
+struct IOStdReq;
 
 /*
  * NVME_IO_ASYNC - submit returned successfully; the IOStdReq is now
@@ -97,7 +103,7 @@ void nvme_cleanup_cmd(struct nvme_request *req);
  */
 static inline BOOL nvme_needs_bounce(const void *buffer)
 {
-    uintptr_t addr = (uintptr_t)buffer;
+    ULONG addr = (ULONG)buffer;
 
     if (addr <= 0x1FFFFFu)
         return TRUE;          /* Chip RAM — PCIe DMA cannot reach */

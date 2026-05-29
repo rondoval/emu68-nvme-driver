@@ -7,9 +7,6 @@
 #ifndef NVME_DEFS_H
 #define NVME_DEFS_H
 
-#include <types.h>
-#include <bits.h>
-
 /* NQN names in commands fields specified one size */
 #define NVMF_NQN_FIELD_LEN	256
 
