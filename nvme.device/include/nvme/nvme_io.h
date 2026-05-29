@@ -70,9 +70,14 @@ BYTE nvme_resubmit_io(struct nvme_request *req);
 /*
  * Per-request lifecycle helpers shared with the admin path in
  * nvme_admin.c.  Tag allocation lives in nvme_queue.h.
+ *
+ * nvme_submit_io: write req->cmd into the SQ and ring the doorbell.
+ * Returns NVME_IO_ASYNC on success (completion path owns @req); on
+ * failure returns IOERR_* and has already nvme_req_destroy'd @req
+ * (caller must not touch it).
  */
 void nvme_req_destroy(struct nvme_request *req);
-BYTE nvme_req_submit(struct nvme_request *req);
+BYTE nvme_submit_io(struct nvme_request *req);
 
 /*
  * nvme_cleanup_cmd - release per-command DMA resources after completion:

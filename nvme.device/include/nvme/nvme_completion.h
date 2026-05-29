@@ -31,7 +31,9 @@ struct nvme_io_context
 enum nvme_req_flags
 {
     NVME_REQ_CANCELLED = (1 << 0),
-    NVME_REQ_USERCMD = (1 << 1),
+    NVME_REQ_USERCMD = (1 << 1),    /* admin passthrough — selects the
+                                     * extended logger in nvme_log_error
+                                     * via nvme_req_is_passthrough */
     NVME_REQ_PRP_LIST = (1 << 2),   /* result.u64 holds a PRP-list
                                      * page address to FreeMem on
                                      * completion (see build_prps) */

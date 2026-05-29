@@ -24,7 +24,7 @@
 #include <device.h>
 #include <nvme/nvme.h>
 #include <nvme/nvme_admin.h>
-#include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_req_submit, nvme_req_destroy */
+#include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_submit_io, nvme_req_destroy */
 #include <nvme/nvme_queue.h> /* nvme_alloc_tag, nvme_inflight_claim */
 
 /* ---------------------------------------------------------------- *
@@ -193,10 +193,10 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
 
     nvme_stage_admin_prps(req, buffer, buflen);
 
-    if (nvme_req_submit(req) != NVME_IO_ASYNC)
+    if (nvme_submit_io(req) != NVME_IO_ASYNC)
     {
         FreeSignal(signal_bit);
-        /* nvme_req_submit already destroyed @req. */
+        /* nvme_submit_io already destroyed @req. */
         return -EIO;
     }
 
@@ -277,9 +277,9 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
 
     nvme_stage_admin_prps(req, buffer, buflen);
 
-    if (nvme_req_submit(req) != NVME_IO_ASYNC)
+    if (nvme_submit_io(req) != NVME_IO_ASYNC)
     {
-        /* nvme_req_submit already destroyed @req. */
+        /* nvme_submit_io already destroyed @req. */
         return -EIO;
     }
     return 0;
