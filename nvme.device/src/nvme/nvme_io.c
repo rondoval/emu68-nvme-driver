@@ -32,6 +32,7 @@
 #include <device.h>
 #include <nvme/nvme_io.h>
 #include <nvme/nvme.h>
+#include <nvme/nvme_constants.h> /* nvme_get_opcode_str */
 #include <nvme/nvme_queue.h> /* nvme_inflight_claim, nvme_inflight_release */
 
 #define NVME_PRP_ENTRIES_PER_PAGE (NVME_CTRL_PAGE_SIZE / sizeof(u64)) /* 512 */
@@ -252,8 +253,8 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
     APTR data_base = req->ctx ? req->ctx->user_data : (req->io ? req->io->io_Data : (APTR)1);
     BOOL is_zero_fill = (opcode == nvme_cmd_write) && data_base == NULL;
 
-    KprintfH("[nvme] setup_rw: opcode=0x%02lx nsid=%lu lba=0x%08lx%08lx count=%lu bytes=%lu buf=%lx%s\n",
-             (ULONG)opcode,
+    KprintfH("[nvme] setup_rw: opcode=0x%02lx (%s) nsid=%lu lba=0x%08lx%08lx count=%lu bytes=%lu buf=%lx%s\n",
+             (ULONG)opcode, nvme_get_opcode_str(opcode),
              (ULONG)(req->unit ? req->unit->nsid : 0),
              (ULONG)(lba >> 32), (ULONG)lba, count, bytes, (ULONG)buffer,
              is_zero_fill ? " (zero-fill)" : "");
@@ -522,10 +523,11 @@ BYTE nvme_submit_io(struct nvme_request *req)
 
     req->submit_us = get_time();
 
-    KprintfH("[nvme] submit_io: qid=%lu tag=%lu opcode=0x%02lx slot=%lu next=%lu db_off=0x%lx\n",
+    KprintfH("[nvme] submit_io: qid=%lu tag=%lu opcode=0x%02lx (%s) slot=%lu next=%lu db_off=0x%lx\n",
              (ULONG)q->qid,
              (ULONG)req->tag,
              (ULONG)req->cmd.common.opcode,
+             nvme_opcode_str(q->qid, req->cmd.common.opcode),
              (ULONG)tail,
              (ULONG)next,
              (ULONG)q->sq_db_off);

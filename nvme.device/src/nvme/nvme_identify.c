@@ -13,6 +13,7 @@
 
 #include <device.h>
 #include <nvme/nvme_admin.h>      /* nvme_submit_sync_cmd */
+#include <nvme/nvme_constants.h>  /* nvme_get_error_status_str */
 #include <nvme/nvme_identify.h>
 
 /*
@@ -189,8 +190,8 @@ static int nvme_identify_ns_descs(struct NVMeController *ctrl,
 	void *data;
 	int status = nvme_submit_identify(ctrl, &c, NVME_IDENTIFY_DATA_SIZE, &data);
 	if (status) {
-		Kprintf("[nvme] %s: Identify Descriptors failed (nsid=%lu, status=0x%lx)\n",
-			__func__, info->nsid, status);
+		Kprintf("[nvme] %s: Identify Descriptors failed (nsid=%lu, status=0x%lx (%s))\n",
+			__func__, info->nsid, status, nvme_get_error_status_str((u16)status));
 		return status;
 	}
 
@@ -242,8 +243,8 @@ static int nvme_identify_ns(struct NVMeController *ctrl, unsigned nsid,
 
 	int error = nvme_submit_identify(ctrl, &c, sizeof(**id), (void **)id);
 	if (error)
-		Kprintf("[nvme] %s: Identify namespace failed (nsid=%lu, status=0x%lx)\n",
-			__func__, nsid, error);
+		Kprintf("[nvme] %s: Identify namespace failed (nsid=%lu, status=0x%lx (%s))\n",
+			__func__, nsid, error, nvme_get_error_status_str((u16)error));
 	return error;
 }
 

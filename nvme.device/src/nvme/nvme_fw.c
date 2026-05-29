@@ -12,6 +12,7 @@
 #include <timing.h> /* get_time, delay_ms, time_deadline_passed */
 
 #include <nvme/nvme_admin.h>
+#include <nvme/nvme_constants.h> /* nvme_get_error_status_str */
 #include <nvme/nvme_ctrl.h> /* nvme_change_ctrl_state */
 #include <nvme/nvme_fw.h>
 #include <nvme/nvme_aen.h> /* nvme_submit_aer */
@@ -55,7 +56,8 @@ static void fw_slot_info_done(struct nvme_request *req)
 
 	if (req->status)
 	{
-		Kprintf("[nvme] fw_slot_info_done: Get FW SLOT INFO error status=0x%lx\n", (ULONG)req->status);
+		Kprintf("[nvme] fw_slot_info_done: Get FW SLOT INFO error status=0x%lx (%s)\n",
+			(ULONG)req->status, nvme_get_error_status_str(req->status));
 		goto out;
 	}
 	if (!log)

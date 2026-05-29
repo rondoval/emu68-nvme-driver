@@ -51,6 +51,7 @@
 #include <memory.h>              /* dma_alloc / dma_free */
 
 #include <nvme/nvme_admin.h>     /* nvme_submit_sync_cmd */
+#include <nvme/nvme_constants.h> /* nvme_get_admin_opcode_str, nvme_get_error_status_str */
 #include <nvme/nvme_io.h>        /* nvme_needs_bounce, DMA_ALIGN_MIN */
 #include <nvme/nvme_passthru.h>
 #include <nvme/nvme_queue.h>     /* nvme_start_freeze, nvme_wait_freeze, nvme_unfreeze */
@@ -142,8 +143,9 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
 {
     struct NVMePassthruCmd *uc = (struct NVMePassthruCmd *)io->io_Data;
 
-    KprintfH("[nvme] passthru: cmd=0x%04lx opcode=0x%02lx nsid=%lu data_len=%lu\n",
+    KprintfH("[nvme] passthru: cmd=0x%04lx opcode=0x%02lx (%s) nsid=%lu data_len=%lu\n",
              (ULONG)io->io_Command, (ULONG)uc->pt_Opcode,
+             nvme_get_admin_opcode_str(uc->pt_Opcode),
              (ULONG)uc->pt_Nsid, (ULONG)uc->pt_DataLen);
 
     /* Readiness gate.  Passthrough is a USERCMD on the admin queue: only
@@ -265,7 +267,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     }
 
     io->io_Actual = uc->pt_DataLen;
-    KprintfH("[nvme] passthru: done status=0x%lx result=0x%08lx\n",
-             (ULONG)status, (ULONG)uc->pt_Result);
+    KprintfH("[nvme] passthru: done status=0x%lx (%s) result=0x%08lx\n",
+             (ULONG)status, nvme_get_error_status_str((u16)status), (ULONG)uc->pt_Result);
     reply_passthru(io, (BYTE)(status & 0xff));
 }

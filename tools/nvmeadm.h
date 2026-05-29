@@ -18,7 +18,7 @@
 
 #include <format.h>
 #include <memory.h>
-#include <nvme/nvme_linux.h>
+#include <nvme/nvme_defs.h>
 
 extern struct ExecBase *SysBase;
 extern struct DosLibrary *DOSBase;

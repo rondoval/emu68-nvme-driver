@@ -29,6 +29,7 @@
 #include <device.h>
 #include <nvme/nvme_io.h>
 #include <nvme/nvme_admin.h> /* nvme_abort_request, nvme_submit_sync_cmd */
+#include <nvme/nvme_constants.h> /* nvme_opcode_str, nvme_get_error_status_str */
 #include <nvme/nvme_queue.h>
 
 #define NVME_IO_QID 1 /* sole I/O queue ID (we create one pair) */
@@ -191,17 +192,17 @@ static void drain_cq(struct nvme_queue *q)
             req->status = status;
             req->result = cqe->result;
             nvme_inflight_release(q, cid);
-            KprintfH("[nvme] CQE: qid=%lu head=%lu cid=%lu status=0x%04lx phase=%lu → completing %s\n",
+            KprintfH("[nvme] CQE: qid=%lu head=%lu cid=%lu status=0x%04lx (%s) phase=%lu → completing %s\n",
                      (ULONG)q->qid, (ULONG)head, (ULONG)cid,
-                     (ULONG)status, (ULONG)cqe_phase,
+                     (ULONG)status, nvme_get_error_status_str(status), (ULONG)cqe_phase,
                      req->unit ? "I/O" : "admin");
             nvme_complete_rq(req);
         }
         else
         {
-            Kprintf("[nvme] drain_cq: unexpected CQE qid=%lu head=%lu cid=%lu status=0x%lx phase=%lu\n",
+            Kprintf("[nvme] drain_cq: unexpected CQE qid=%lu head=%lu cid=%lu status=0x%lx (%s) phase=%lu\n",
                     (ULONG)q->qid, (ULONG)head, (ULONG)cid,
-                    (ULONG)status, (ULONG)cqe_phase);
+                    (ULONG)status, nvme_get_error_status_str(status), (ULONG)cqe_phase);
         }
 
         head++;
@@ -305,10 +306,12 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
             return;
         }
 
-        Kprintf("[nvme] timeout: qid=%lu tag=%lu opcode=0x%02lx "
+        Kprintf("[nvme] timeout: qid=%lu tag=%lu opcode=0x%02lx (%s) "
                 "elapsed=%lu ms — issuing Abort\n",
                 (ULONG)q->qid, (ULONG)req->tag,
-                (ULONG)req->cmd.common.opcode, (ULONG)elapsed_ms);
+                (ULONG)req->cmd.common.opcode,
+                nvme_opcode_str(q->qid, req->cmd.common.opcode),
+                (ULONG)elapsed_ms);
 
         if (nvme_abort_request(ctrl, req) != 0)
         {

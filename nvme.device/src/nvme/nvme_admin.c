@@ -24,6 +24,7 @@
 #include <device.h>
 #include <nvme/nvme.h>
 #include <nvme/nvme_admin.h>
+#include <nvme/nvme_constants.h> /* nvme_get_admin_opcode_str, nvme_get_error_status_str */
 #include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_submit_io, nvme_req_destroy */
 #include <nvme/nvme_queue.h> /* nvme_alloc_tag, nvme_inflight_claim */
 
@@ -161,8 +162,9 @@ static void nvme_stage_admin_prps(struct nvme_request *req,
 int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
                          union nvme_result *result, void *buffer, u32 buflen)
 {
-    KprintfH("[nvme] submit_sync_cmd: ctrl=%lx opcode=0x%02lx buf=%lx buflen=%lu result=%lx\n",
+    KprintfH("[nvme] submit_sync_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu result=%lx\n",
              (ULONG)ctrl, (ULONG)cmd->common.opcode,
+             nvme_get_admin_opcode_str(cmd->common.opcode),
              (ULONG)buffer, (ULONG)buflen, (ULONG)result);
 
     if (!ctrl)
@@ -245,8 +247,9 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
                           void (*done)(struct nvme_request *req), void *priv,
                           enum nvme_req_flags req_flags)
 {
-    KprintfH("[nvme] submit_async_cmd: ctrl=%lx opcode=0x%02lx buf=%lx buflen=%lu done=%lx priv=%lx flags=0x%lx\n",
+    KprintfH("[nvme] submit_async_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu done=%lx priv=%lx flags=0x%lx\n",
              (ULONG)ctrl, (ULONG)cmd->common.opcode,
+             nvme_get_admin_opcode_str(cmd->common.opcode),
              (ULONG)buffer, (ULONG)buflen, (ULONG)done, (ULONG)priv,
              (ULONG)req_flags);
 
@@ -298,10 +301,10 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
  */
 static void abort_done(struct nvme_request *req)
 {
-    KprintfH("[nvme] abort_done: sqid=%lu cid=%lu status=0x%lx\n",
+    KprintfH("[nvme] abort_done: sqid=%lu cid=%lu status=0x%lx (%s)\n",
              (ULONG)le16(req->cmd.abort.sqid),
              (ULONG)le16(req->cmd.abort.cid),
-             (ULONG)req->status);
+             (ULONG)req->status, nvme_get_error_status_str(req->status));
     slab_free(&req->ac->req_slab, req);
 }
 

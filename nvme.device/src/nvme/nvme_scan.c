@@ -13,6 +13,7 @@
 #include <errors.h>
 
 #include <nvme/nvme_admin.h>
+#include <nvme/nvme_constants.h>	/* nvme_get_error_status_str */
 #include <nvme/nvme_ctrl.h>		/* nvme_change_ctrl_state, nvme_init_non_mdts_limits */
 #include <nvme/nvme_identify.h> /* struct nvme_ns_info, nvme_identify_* */
 #include <nvme/nvme_task.h>
@@ -302,7 +303,8 @@ static int nvme_scan_ns_list(struct NVMeController *ctrl)
 		ret = nvme_submit_sync_cmd(ctrl, &cmd, NULL, ns_list, NVME_IDENTIFY_DATA_SIZE);
 		if (ret)
 		{
-			Kprintf("[nvme] %s: Identify NS List failed (status=0x%lx)\n", __func__, ret);
+			Kprintf("[nvme] %s: Identify NS List failed (status=0x%lx (%s))\n",
+				__func__, ret, nvme_get_error_status_str((u16)ret));
 			goto free;
 		}
 
