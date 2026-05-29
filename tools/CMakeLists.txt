@@ -8,9 +8,19 @@ add_executable(nvmeinfo
     nvmeinfo.c
 )
 
+add_executable(nvmeadm
+    nvmeadm.c
+    nvmeadm_core.c
+    nvmeadm_commands.c
+)
+
 target_link_libraries(nvmeinfo
     Emu68PCIe::pcie_headers
      Emu68Common::common
+)
+
+target_link_libraries(nvmeadm
+    Emu68Common::common
 )
 
 target_include_directories(nvmeinfo PRIVATE
@@ -20,4 +30,9 @@ target_include_directories(nvmeinfo PRIVATE
     ${CMAKE_SOURCE_DIR}/bcmpcie.library/include
 )
 
+target_include_directories(nvmeadm PRIVATE
+    ${CMAKE_CURRENT_SOURCE_DIR}/../nvme.device/include
+)
+
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvmeinfo DESTINATION C)
+install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvmeadm DESTINATION C)
