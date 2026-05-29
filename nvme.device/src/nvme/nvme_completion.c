@@ -61,8 +61,6 @@ static BYTE nvme_error_status(u16 status)
  */
 static void nvme_log_err_normal(struct nvme_request *req)
 {
-	const char *name = req->unit ? req->unit->vendor_str : "(admin)";
-
 	if (req->unit)
 	{
 		u8 shift = (u8)req->unit->blockShift;
@@ -78,8 +76,8 @@ static void nvme_log_err_normal(struct nvme_request *req)
 		else
 			fail_lba = le64(req->cmd.rw.slba); /* self-inverse: LE->native */
 
-		Kprintf("%s: %s(0x%lx) @ LBA %08lx%08lx, %lu blocks, %s (sct 0x%lx / sc 0x%lx) %s%s\n",
-				name,
+		Kprintf("%.40s: %s(0x%lx) @ LBA %08lx%08lx, %lu blocks, %s (sct 0x%lx / sc 0x%lx) %s%s\n",
+				req->ac->id_strings.model,
 				nvme_get_opcode_str(req->cmd.common.opcode),
 				req->cmd.common.opcode,
 				u64_hi32(fail_lba), u64_lo32(fail_lba),
@@ -93,7 +91,7 @@ static void nvme_log_err_normal(struct nvme_request *req)
 	}
 
 	Kprintf("%s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%s\n",
-			name,
+			"(admin)",
 			nvme_get_admin_opcode_str(req->cmd.common.opcode),
 			req->cmd.common.opcode,
 			nvme_get_error_status_str(req->status),
@@ -115,11 +113,10 @@ static void nvme_log_err_normal(struct nvme_request *req)
  */
 static void nvme_log_err_passthru(struct nvme_request *req)
 {
-	const char *name = req->unit ? req->unit->vendor_str : "(admin)";
-
-	Kprintf("%s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%s"
-			"cdw10=0x%lx cdw11=0x%lx cdw12=0x%lx cdw13=0x%lx cdw14=0x%lx cdw15=0x%lx\n",
-			name,
+	Kprintf(req->unit
+			? "%.40s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%scdw10=0x%lx cdw11=0x%lx cdw12=0x%lx cdw13=0x%lx cdw14=0x%lx cdw15=0x%lx\n"
+			: "%s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%scdw10=0x%lx cdw11=0x%lx cdw12=0x%lx cdw13=0x%lx cdw14=0x%lx cdw15=0x%lx\n",
+			req->unit ? (const void *)req->ac->id_strings.model : "(admin)",
 			req->unit ? nvme_get_opcode_str(req->cmd.common.opcode) : nvme_get_admin_opcode_str(req->cmd.common.opcode),
 			req->cmd.common.opcode,
 			nvme_get_error_status_str(req->status),
