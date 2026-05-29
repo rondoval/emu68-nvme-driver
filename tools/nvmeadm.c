@@ -12,6 +12,22 @@ enum
     ARG_COUNT
 };
 
+typedef int (*nvmeadm_handler_t)(void);
+
+struct nvmeadm_command_entry
+{
+    CONST_STRPTR command;
+    CONST_STRPTR subcommand;
+    CONST_STRPTR action;
+    nvmeadm_handler_t handler;
+};
+
+struct nvmeadm_usage_entry
+{
+    CONST_STRPTR command;
+    CONST_STRPTR usage;
+};
+
 static BOOL streq(CONST_STRPTR lhs, CONST_STRPTR rhs)
 {
     if (!lhs || !rhs)
@@ -56,6 +72,95 @@ static void print_usage(void)
     Printf((CONST_STRPTR)"\n");
 }
 
+static int run_self_test_start_short_wrapper(void)
+{
+    return run_self_test_control(NVMEADM_SELF_TEST_SHORT,
+                                 (CONST_STRPTR)"Self-test start short");
+}
+
+static int run_self_test_start_extended_wrapper(void)
+{
+    return run_self_test_control(NVMEADM_SELF_TEST_EXTENDED,
+                                 (CONST_STRPTR)"Self-test start extended");
+}
+
+static int run_self_test_abort_wrapper(void)
+{
+    return run_self_test_control(NVMEADM_SELF_TEST_ABORT,
+                                 (CONST_STRPTR)"Self-test abort");
+}
+
+static const struct nvmeadm_command_entry nvmeadm_commands[] = {
+    { (CONST_STRPTR)"smart",      NULL,                     NULL,                     run_smart },
+    { (CONST_STRPTR)"identify",   NULL,                     NULL,                     run_identify },
+    { (CONST_STRPTR)"identify",   (CONST_STRPTR)"caps",   NULL,                     run_identify_caps },
+    { (CONST_STRPTR)"changed-ns", NULL,                     NULL,                     run_changed_ns },
+    { (CONST_STRPTR)"error-log",  NULL,                     NULL,                     run_error_log },
+    { (CONST_STRPTR)"get-feature",NULL,                     NULL,                     run_get_feature },
+    { (CONST_STRPTR)"self-test",  (CONST_STRPTR)"status", NULL,                     run_self_test },
+    { (CONST_STRPTR)"self-test",  (CONST_STRPTR)"start",  (CONST_STRPTR)"short",  run_self_test_start_short_wrapper },
+    { (CONST_STRPTR)"self-test",  (CONST_STRPTR)"start",  (CONST_STRPTR)"extended", run_self_test_start_extended_wrapper },
+    { (CONST_STRPTR)"self-test",  (CONST_STRPTR)"abort",  NULL,                     run_self_test_abort_wrapper },
+    { (CONST_STRPTR)"fw-log",     NULL,                     NULL,                     run_fw_log },
+};
+
+static const struct nvmeadm_usage_entry nvmeadm_usage_entries[] = {
+    { (CONST_STRPTR)"identify",   (CONST_STRPTR)"identify|identify caps" },
+    { (CONST_STRPTR)"changed-ns", (CONST_STRPTR)"changed-ns" },
+    { (CONST_STRPTR)"error-log",  (CONST_STRPTR)"error-log" },
+    { (CONST_STRPTR)"get-feature",(CONST_STRPTR)"get-feature" },
+    { (CONST_STRPTR)"self-test",  (CONST_STRPTR)"self-test status|start <short|extended>|abort" },
+    { (CONST_STRPTR)"fw-log",     (CONST_STRPTR)"fw-log" },
+};
+
+static BOOL token_matches(CONST_STRPTR expected, CONST_STRPTR actual)
+{
+    if (expected == NULL)
+        return strempty(actual);
+
+    return streq(expected, actual);
+}
+
+static int dispatch_command(CONST_STRPTR command, CONST_STRPTR subcommand,
+                            CONST_STRPTR action)
+{
+    ULONG i;
+
+    for (i = 0; i < (ULONG)(sizeof(nvmeadm_commands) / sizeof(nvmeadm_commands[0])); i++)
+    {
+        const struct nvmeadm_command_entry *entry = &nvmeadm_commands[i];
+
+        if (!streq(command, entry->command))
+            continue;
+        if (!token_matches(entry->subcommand, subcommand))
+            continue;
+        if (!token_matches(entry->action, action))
+            continue;
+
+        return entry->handler();
+    }
+
+    for (i = 0; i < (ULONG)(sizeof(nvmeadm_usage_entries) / sizeof(nvmeadm_usage_entries[0])); i++)
+    {
+        const struct nvmeadm_usage_entry *entry = &nvmeadm_usage_entries[i];
+
+        if (streq(command, entry->command))
+        {
+            print_command_usage(entry->usage);
+            return 20;
+        }
+    }
+
+    Printf((CONST_STRPTR)"Unknown command: %s", (ULONG)command);
+    if (!strempty(subcommand))
+        Printf((CONST_STRPTR)" %s", (ULONG)subcommand);
+    if (!strempty(action))
+        Printf((CONST_STRPTR)" %s", (ULONG)action);
+    Printf((CONST_STRPTR)"\n\n");
+    print_usage();
+    return 20;
+}
+
 int main(void)
 {
     LONG argvals[ARG_COUNT] = { 0 };
@@ -84,127 +189,7 @@ int main(void)
     action = (CONST_STRPTR)argvals[ARG_ACTION];
     FreeArgs(rda);
 
-    if (streq(command, (CONST_STRPTR)"smart") && strempty(subcommand) && strempty(action))
-    {
-        rc = run_smart();
-    }
-    else if (streq(command, (CONST_STRPTR)"identify") && strempty(subcommand) && strempty(action))
-    {
-        rc = run_identify();
-    }
-    else if (streq(command, (CONST_STRPTR)"identify") &&
-             streq(subcommand, (CONST_STRPTR)"caps") && strempty(action))
-    {
-        rc = run_identify_caps();
-    }
-    else if (streq(command, (CONST_STRPTR)"identify"))
-    {
-        print_command_usage((CONST_STRPTR)"identify|identify caps");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"changed-ns") && strempty(subcommand) && strempty(action))
-    {
-        rc = run_changed_ns();
-    }
-    else if (streq(command, (CONST_STRPTR)"changed-ns"))
-    {
-        print_command_usage((CONST_STRPTR)"changed-ns");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"error-log") && strempty(subcommand) && strempty(action))
-    {
-        rc = run_error_log();
-    }
-    else if (streq(command, (CONST_STRPTR)"error-log"))
-    {
-        print_command_usage((CONST_STRPTR)"error-log");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"get-feature") && strempty(subcommand) && strempty(action))
-    {
-        rc = run_get_feature();
-    }
-    else if (streq(command, (CONST_STRPTR)"get-feature"))
-    {
-        print_command_usage((CONST_STRPTR)"get-feature");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") && strempty(subcommand) && strempty(action))
-    {
-        print_command_usage((CONST_STRPTR)"self-test status|start <short|extended>|abort");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") &&
-             streq(subcommand, (CONST_STRPTR)"status") &&
-             strempty(action))
-    {
-        rc = run_self_test();
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") &&
-             streq(subcommand, (CONST_STRPTR)"status"))
-    {
-        print_command_usage((CONST_STRPTR)"self-test status");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") &&
-             streq(subcommand, (CONST_STRPTR)"start") &&
-             strempty(action))
-    {
-        print_command_usage((CONST_STRPTR)"self-test start <short|extended>");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") &&
-             streq(subcommand, (CONST_STRPTR)"start") &&
-             streq(action, (CONST_STRPTR)"short"))
-    {
-        rc = run_self_test_control(NVMEADM_SELF_TEST_SHORT,
-                                   (CONST_STRPTR)"Self-test start short");
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") &&
-             streq(subcommand, (CONST_STRPTR)"start") &&
-             streq(action, (CONST_STRPTR)"extended"))
-    {
-        rc = run_self_test_control(NVMEADM_SELF_TEST_EXTENDED,
-                                   (CONST_STRPTR)"Self-test start extended");
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") &&
-             streq(subcommand, (CONST_STRPTR)"abort") &&
-             strempty(action))
-    {
-        rc = run_self_test_control(NVMEADM_SELF_TEST_ABORT,
-                                   (CONST_STRPTR)"Self-test abort");
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test") &&
-             streq(subcommand, (CONST_STRPTR)"abort"))
-    {
-        print_command_usage((CONST_STRPTR)"self-test abort");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"self-test"))
-    {
-        print_command_usage((CONST_STRPTR)"self-test status|start <short|extended>|abort");
-        rc = 20;
-    }
-    else if (streq(command, (CONST_STRPTR)"fw-log") && strempty(subcommand) && strempty(action))
-    {
-        rc = run_fw_log();
-    }
-    else if (streq(command, (CONST_STRPTR)"fw-log"))
-    {
-        print_command_usage((CONST_STRPTR)"fw-log");
-        rc = 20;
-    }
-    else
-    {
-        Printf((CONST_STRPTR)"Unknown command: %s", (ULONG)command);
-        if (!strempty(subcommand))
-            Printf((CONST_STRPTR)" %s", (ULONG)subcommand);
-        if (!strempty(action))
-            Printf((CONST_STRPTR)" %s", (ULONG)action);
-        Printf((CONST_STRPTR)"\n\n");
-        print_usage();
-        rc = 20;
-    }
+    rc = dispatch_command(command, subcommand, action);
 
     CloseLibrary((struct Library *)DOSBase);
     return rc;

@@ -1,8 +1,22 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(nvmeinfo VERSION ${CMAKE_PROJECT_VERSION})
+project(nvme-tools VERSION ${CMAKE_PROJECT_VERSION})
 
-add_compile_options(-Os -Wall -Wconversion -Wsign-conversion -Wshadow -Wmissing-prototypes -Wstrict-prototypes -Wno-unused-function -Wno-shift-count-overflow -DDEBUG)
-add_link_options(-s)
+set(NVME_TOOL_COMPILE_OPTIONS
+    -Os
+    -Wall
+    -Wconversion
+    -Wsign-conversion
+    -Wshadow
+    -Wmissing-prototypes
+    -Wstrict-prototypes
+    -Wno-unused-function
+    -Wno-shift-count-overflow
+    -DDEBUG
+)
+
+set(NVME_TOOL_LINK_OPTIONS
+    -s
+)
 
 add_executable(nvmeinfo
     nvmeinfo.c
@@ -14,9 +28,15 @@ add_executable(nvmeadm
     nvmeadm_commands.c
 )
 
+target_compile_options(nvmeinfo PRIVATE ${NVME_TOOL_COMPILE_OPTIONS})
+target_compile_options(nvmeadm PRIVATE ${NVME_TOOL_COMPILE_OPTIONS})
+
+target_link_options(nvmeinfo PRIVATE ${NVME_TOOL_LINK_OPTIONS})
+target_link_options(nvmeadm PRIVATE ${NVME_TOOL_LINK_OPTIONS})
+
 target_link_libraries(nvmeinfo
     Emu68PCIe::pcie_headers
-     Emu68Common::common
+    Emu68Common::common
 )
 
 target_link_libraries(nvmeadm
