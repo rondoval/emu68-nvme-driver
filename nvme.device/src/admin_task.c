@@ -12,7 +12,7 @@
  *   - NVMe passthrough (NSCMD_NVME_*_PASS): freeze (if CSE), submit_sync,
  *     unfreeze, ReplyMsg.
  *   - AEN-driven namespace rescan (nvme_scan_namespaces).
- *   - Firmware activation polling (nvme_fw_act_work_amiga).
+ *   - Firmware activation polling (nvme_fw_act_work).
  *
  * Lifecycle: AdminTaskStart at probe (after UnitTaskStart so signals can
  * forward), AdminTaskStop at unprobe (before UnitTaskStop, see below).
@@ -33,9 +33,24 @@
 #include <debug.h>
 
 #include <nvme/nvme.h>
-#include <nvme/nvme_fw.h>       /* nvme_fw_act_work_amiga */
+#include <nvme/nvme_fw.h>       /* nvme_fw_act_work */
 #include <nvme/nvme_passthru.h>  /* nvme_passthru_process */
 #include <nvme/nvme_scan.h>      /* nvme_scan_namespaces */
+#include <nvme/nvme_task.h>
+
+/* AdminWorker owns scan_signal and fw_act_signal; callers only need to
+ * poke the task so its Wait() loop drains the queued work. */
+void nvme_queue_scan(struct NVMeController *ctrl)
+{
+    if (ctrl && ctrl->admin_task)
+        Signal(ctrl->admin_task, 1UL << ctrl->scan_signal);
+}
+
+void nvme_queue_fw_act_work(struct NVMeController *ctrl)
+{
+    if (ctrl && ctrl->admin_task)
+        Signal(ctrl->admin_task, 1UL << ctrl->fw_act_signal);
+}
 
 /*
  * AdminWorker - body of the per-controller admin task.
@@ -94,7 +109,7 @@ void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
         if (sigset & (1UL << ctrl->fw_act_signal))
         {
             SetSignal(0, 1UL << ctrl->fw_act_signal);
-            nvme_fw_act_work_amiga(ctrl);
+            nvme_fw_act_work(ctrl);
         }
 
         if (sigset & (1UL << ctrl->adminPort->mp_SigBit))

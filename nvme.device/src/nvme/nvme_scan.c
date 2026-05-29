@@ -13,10 +13,9 @@
 #include <errors.h>
 
 #include <nvme/nvme_admin.h>
-#include <nvme/nvme_ctrl.h>		/* nvme_change_ctrl_state */
+#include <nvme/nvme_ctrl.h>		/* nvme_change_ctrl_state, nvme_init_non_mdts_limits */
 #include <nvme/nvme_identify.h> /* struct nvme_ns_info, nvme_identify_* */
-#include <nvme/nvme_kpool.h>	/* nvme_queue_scan */
-#include <nvme/nvme_log.h>		/* nvme_get_log, nvme_init_non_mdts_limits */
+#include <nvme/nvme_task.h>
 #include <nvme/nvme_probe.h>	/* nvme_alloc_nvmeunit */
 #include <nvme/nvme_queue.h>	/* nvme_unquiesce_io_queues */
 #include <nvme/nvme_scan.h>
@@ -41,6 +40,70 @@ static struct nvme_ns *nvme_find_ns(struct NVMeController *ctrl, u32 nsid)
 }
 
 /*
+ * nvme_ns_ids_equal - compare two namespace ID sets for equality
+ *
+ * Checks UUID, NGUID, EUI64, and CSI fields.  Used during namespace
+ * revalidation to determine whether two nvme_ns_ids structures refer to the
+ * same namespace.
+ *
+ * @a: first ID set
+ * @b: second ID set
+ * Returns: TRUE if all four identifiers match, FALSE otherwise
+ */
+static BOOL nvme_ns_ids_equal(struct nvme_ns_ids *a, struct nvme_ns_ids *b)
+{
+	return memcmp(&a->uuid, &b->uuid, NVME_NIDT_UUID_LEN) == 0 &&
+		memcmp(&a->nguid, &b->nguid, sizeof(a->nguid)) == 0 &&
+		memcmp(&a->eui64, &b->eui64, sizeof(a->eui64)) == 0 &&
+		a->csi == b->csi;
+}
+
+/*
+ * nvme_update_ns_info - commit gathered namespace info to the nvme_ns
+ *
+ * All Identify data was already fetched by nvme_identify_ns_info(), so this
+ * issues no command: it copies the block geometry and caches the metadata/PI
+ * characteristics onto @ns.  This driver presents plain logical blocks only, so
+ * block capacity is exposed only for a usable LBA size (512 B..4 KiB) with no
+ * metadata and no protection information; otherwise the namespace stays present
+ * (READY) but reports zero capacity and won't accept block I/O.  Called from
+ * nvme_alloc_ns() and nvme_validate_ns() during probe and rescan.
+ *
+ * @ns:   namespace to update
+ * @info: namespace info gathered by nvme_identify_ns_info()
+ */
+static void nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
+{
+	if (info->ids.csi != NVME_CSI_NVM) {
+		Kprintf("[nvme] %s: block device for nsid %lu not supported (csi %lu)\n",
+			__func__, info->nsid, info->ids.csi);
+		set_bit(NVME_NS_READY, &ns->flags);
+		return;
+	}
+
+	/* cache namespace geometry + metadata/PI characteristics */
+	ns->lba_shift = info->lba_shift;
+	ns->ms = info->ms;
+	ns->pi_type = info->pi_type;
+	ns->pic = info->pic;
+	ns->elbaf = info->elbaf;
+	ns->lbstm = info->lbstm;
+	if (info->deac)
+		ns->features |= NVME_NS_DEAC;
+
+	if (info->ms == 0 && info->pi_type == 0 &&
+	    ns->lba_shift >= 9 && ns->lba_shift <= 12)
+		ns->disk_capacity_sectors = nvme_lba_to_sect(ns, info->nsze);
+	else
+		Kprintf("[nvme] %s: nsid %lu not a plain block ns "
+			"(ms=%lu pi=%lu ds=%lu) - no block I/O\n",
+			__func__, info->nsid, (ULONG)info->ms,
+			(ULONG)info->pi_type, (ULONG)ns->lba_shift);
+
+	set_bit(NVME_NS_READY, &ns->flags);
+}
+
+/*
  * nvme_alloc_ns - allocate and initialise a new NVMe namespace
  *
  * Pool-allocates an nvme_ns, applies geometry via nvme_update_ns_info, then
@@ -62,11 +125,7 @@ static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info
 	ns->ns_id = info->nsid;
 	ns->ids = info->ids;
 
-	if (nvme_update_ns_info(ns, info))
-	{
-		pool_free(ctrl->memoryPool, ns);
-		return;
-	}
+	nvme_update_ns_info(ns, info);
 
 	/* Create Unit for the namespace */
 	ns->unit = nvme_alloc_nvmeunit(ctrl, ns->ns_id,
@@ -130,44 +189,32 @@ static void nvme_ns_remove_by_nsid(struct NVMeController *ctrl, u32 nsid)
 /*
  * nvme_validate_ns - re-check an existing namespace against a fresh scan
  *
- * Compares the cached ns->ids against the freshly-retrieved info; logs and
- * bails if they changed (NSID re-used for a different namespace).
- * Otherwise refreshes geometry via nvme_update_ns_info().  Removes the
- * namespace if the device returned a fatal (DNR) status.
+ * Compares the cached ns->ids against the freshly-retrieved info; if they
+ * changed (NSID re-used for a different namespace) the namespace is removed.
+ * Otherwise refreshes geometry via nvme_update_ns_info().
  *
  * @ns:   namespace to validate
  * @info: fresh namespace info from the current scan
  */
 static void nvme_validate_ns(struct nvme_ns *ns, struct nvme_ns_info *info)
 {
-	int ret = NVME_SC_INVALID_NS | NVME_STATUS_DNR;
-
 	if (!nvme_ns_ids_equal(&ns->ids, &info->ids))
 	{
 		Kprintf("[nvme] %s: identifiers changed for nsid %ld\n", __func__, ns->ns_id);
-		goto out;
+		nvme_ns_remove(ns);
+		return;
 	}
 
-	ret = nvme_update_ns_info(ns, info);
-out:
-	/*
-	 * Only remove the namespace if we got a fatal error back from the
-	 * device, otherwise ignore the error and just move on.
-	 *
-	 * TODO: we should probably schedule a delayed retry here.
-	 */
-	if (ret > 0 && (ret & NVME_STATUS_DNR))
-		nvme_ns_remove(ns);
+	nvme_update_ns_info(ns, info);
 }
 
 /*
  * nvme_scan_ns - scan a single namespace ID and add or validate it
  *
- * Fetches the namespace descriptor list and (if available) the CS-independent
- * identify data for nsid.  Removes the namespace if it is gone, skips it if
- * not ready, and either validates the existing namespace or allocates a new
- * one.  Called from nvme_scan_ns_list() per active-NSID and from
- * nvme_scan_ns_sequential() per 1..NN.
+ * Gathers all Identify data for nsid via nvme_identify_ns_info().  Removes the
+ * namespace if it is gone, skips it if not ready, and either validates the
+ * existing namespace or allocates a new one.  Called from nvme_scan_ns_list()
+ * per active-NSID and from nvme_scan_ns_sequential() per 1..NN.
  *
  * @ctrl: controller to scan
  * @nsid: namespace ID to probe
@@ -175,35 +222,15 @@ out:
 static void nvme_scan_ns(struct NVMeController *ctrl, unsigned nsid)
 {
 	struct nvme_ns_info info = {.nsid = nsid};
-	int ret = 1;
 
-	if (nvme_identify_ns_descs(ctrl, &info))
-		return;
-
-	if (info.ids.csi != NVME_CSI_NVM && !nvme_multi_css(ctrl))
-	{
-		Kprintf("[nvme] %s: command set not reported for nsid: %ld\n", __func__, nsid);
-		return;
-	}
-
-	/*
-	 * If available try to use the Command Set Independent Identify Namespace
-	 * data structure to find all the generic information that is needed to
-	 * set up a namespace.  If not fall back to the legacy version.
-	 */
-	if ((ctrl->cap & NVME_CAP_CRMS_CRIMS) ||
-		(info.ids.csi != NVME_CSI_NVM) ||
-		ctrl->vs >= NVME_VS(2, 0, 0))
-		ret = nvme_ns_info_from_id_cs_indep(ctrl, &info);
-	if (ret > 0)
-		ret = nvme_ns_info_from_identify(ctrl, &info);
+	int ret = nvme_identify_ns_info(ctrl, &info);
 
 	if (info.is_removed)
 		nvme_ns_remove_by_nsid(ctrl, nsid);
 
 	/*
-	 * Ignore the namespace if it is not ready. We will get an AEN once it
-	 * becomes ready and restart the scan.
+	 * Ignore the namespace if the gather failed or it is not ready.  We will
+	 * get an AEN once it becomes ready and restart the scan.
 	 */
 	if (ret || !info.is_ready)
 		return;
@@ -349,7 +376,7 @@ static void nvme_clear_changed_ns_log(struct NVMeController *ctrl)
 	 * updates.
 	 */
 	error = nvme_get_log(ctrl, NVME_NSID_ALL, NVME_LOG_CHANGED_NS, 0,
-						 NVME_CSI_NVM, log, log_size, 0);
+						 NVME_CSI_NVM, log, log_size, 0, NULL, NULL);
 	if (error)
 		Kprintf("[nvme] %s: reading changed ns log failed: %ld\n", __func__, error);
 

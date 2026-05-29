@@ -493,3 +493,56 @@ int nvme_configure_host_options(struct NVMeController *ctrl)
     pool_free(ctrl->memoryPool, host);
     return ret;
 }
+
+/*
+ * nvme_get_log - issue a Get Log Page command, synchronously or asynchronously
+ *
+ * Builds the Get Log Page command (LSI is always 0 in this driver) and submits
+ * it.  The submission mode is chosen by @done:
+ *
+ *   @done == NULL: submitted synchronously; the result is in @log on return and
+ *                  the caller owns @log.  Must NOT be called from the admin/unit
+ *                  task — it blocks on completion (see nvme_submit_sync_cmd).
+ *   @done != NULL: submitted asynchronously; @done fires from the completion
+ *                  drain with the CQE latched, owns the request, and must free
+ *                  @log.  Safe from any task.  @priv is recovered as req->priv.
+ *
+ * Used by AEN handling (changed-ns log), the Command Effects Log fetch during
+ * controller identification (both sync), and the firmware-slot read in
+ * nvme_fw.c (async).
+ *
+ * @ctrl:     controller to query
+ * @nsid:     namespace ID (NVME_NSID_ALL for controller-level logs)
+ * @log_page: log page identifier (NVME_LOG_*)
+ * @lsp:      log specific parameter
+ * @csi:      command set identifier for I/O Command Set specific logs
+ * @log:      output buffer
+ * @size:     size of the output buffer in bytes
+ * @offset:   byte offset within the log page
+ * @done:     async completion callback, or NULL for a synchronous submit
+ * @priv:     opaque value recovered as req->priv in @done (async only)
+ * Returns: 0 on success (sync) / on submit (async); negative errno or positive
+ *          NVMe status otherwise.  On async submit failure @done does not run
+ *          and the caller still owns @log.
+ */
+int nvme_get_log(struct NVMeController *ctrl, u32 nsid, u8 log_page, u8 lsp, u8 csi,
+		void *log, size_t size, u64 offset,
+		void (*done)(struct nvme_request *), void *priv)
+{
+	struct nvme_command c = { };
+	u32 dwlen = nvme_bytes_to_numd(size);
+
+	c.get_log_page.opcode = nvme_admin_get_log_page;
+	c.get_log_page.nsid = le32(nsid);
+	c.get_log_page.lid = log_page;
+	c.get_log_page.lsp = lsp;
+	c.get_log_page.numdl = le16(dwlen & ((1 << 16) - 1));
+	c.get_log_page.numdu = le16(dwlen >> 16);
+	c.get_log_page.lpol = le32(u64_lo32(offset));
+	c.get_log_page.lpou = le32(u64_hi32(offset));
+	c.get_log_page.csi = csi;
+
+	if (done)
+		return nvme_submit_async_cmd(ctrl, &c, log, size, done, priv, 0);
+	return nvme_submit_sync_cmd(ctrl, &c, NULL, log, size);
+}

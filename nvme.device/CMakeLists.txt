@@ -53,6 +53,8 @@ add_executable(nvme.device
     src/nvme/nvme_admin.c
     src/nvme/nvme_passthru.c
     src/nvme/nvme_aen.c
+    src/nvme/nvme_fw.c
+    src/nvme/nvme_identify.c
     src/nvme/nvme_completion.c
     src/nvme/nvme_scan.c
     mounter/mounter.c

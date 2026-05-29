@@ -577,7 +577,7 @@ BYTE nvme_resubmit_io(struct nvme_request *req)
  */
 static inline BOOL nvme_check_ready(struct NVMeController *ctrl)
 {
-    return likely(nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE);
+    return likely(nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE) ? TRUE : FALSE;
 }
 
 /*

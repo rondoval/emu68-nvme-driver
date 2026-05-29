@@ -31,13 +31,12 @@
 
 #include <nvme/nvme_admin.h> /* nvme_configure_timestamp, nvme_configure_host_options */
 #include <nvme/nvme_aen.h>   /* nvme_enable_aen, nvme_submit_aer */
-#include <nvme/nvme_ctrl.h>  /* nvme_admin_ctrl, nvme_change_ctrl_state */
+#include <nvme/nvme_ctrl.h>  /* nvme_admin_ctrl, nvme_change_ctrl_state, nvme_init_identify */
 #include <nvme/nvme_hmb.h>
-#include <nvme/nvme_kpool.h> /* nvme_queue_scan, nvme_change_uevent */
-#include <nvme/nvme_log.h>   /* nvme_init_identify */
 #include <nvme/nvme_probe.h>
 #include <nvme/nvme_queue.h> /* nvme_setup_admin_queue, nvme_setup_io_queue, nvme_unquiesce_io_queues */
 #include <nvme/nvme_scan.h>  /* nvme_scan_namespaces */
+#include <nvme/nvme_task.h>
 
 /* NVMe PCI class code: Mass Storage / NVM Express (base 0x01, sub 0x08, prog-if 0x02) */
 #define NVME_PCI_CLASS 0x010802UL

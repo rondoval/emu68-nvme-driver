@@ -12,7 +12,7 @@
 #include <nvme/nvme_admin.h> /* nvme_set_features, nvme_submit_async_cmd */
 #include <nvme/nvme_aen.h>
 #include <nvme/nvme_ctrl.h>	   /* nvme_change_ctrl_state */
-#include <nvme/nvme_kpool.h>   /* nvme_queue_scan, nvme_queue_fw_act_work, nvme_reset_ctrl */
+#include <nvme/nvme_task.h>
 
 /*
  * nvme_aer_type - extract the AER type from an AEN completion result
@@ -80,7 +80,8 @@ static BOOL nvme_handle_aen_notice(struct NVMeController *ctrl, u32 result)
 		ctrl->aen_result = result;
 		break;
 	default:
-		Kprintf("[nvme] %s: async event result %08lx\n", result);
+		Kprintf("[nvme] %s: async event result %08lx\n",
+			__func__, (ULONG)result);
 	}
 	return requeue;
 }

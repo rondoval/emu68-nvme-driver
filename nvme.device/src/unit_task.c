@@ -18,6 +18,22 @@
 #include <nvme/nvme.h>       /* types + inlines */
 #include <nvme/nvme_probe.h> /* nvme_reset_controller */
 #include <nvme/nvme_queue.h> /* nvme_process_completions, nvme_tick_watchdog */
+#include <nvme/nvme_task.h>
+
+/* Request an asynchronous controller reset from whichever path noticed
+ * the fault; the unit task consumes reset_signal in its Wait() loop. */
+int nvme_reset_ctrl(struct NVMeController *ctrl)
+{
+    struct NVMeController *ac = ctrl ? ctrl : NULL;
+
+    if (!ac || !ac->unit_task) {
+        Kprintf("[nvme] reset_ctrl: no task to signal\n");
+        return -1;
+    }
+
+    Signal(ac->unit_task, 1UL << ac->reset_signal);
+    return 0;
+}
 
 /*
  * UnitTask - per-controller task body.

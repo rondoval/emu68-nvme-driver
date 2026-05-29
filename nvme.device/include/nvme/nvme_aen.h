@@ -34,7 +34,7 @@ void nvme_enable_aen(struct NVMeController *ctrl);
  * function directly to re-arm.
  *
  * Called from nvme_start_ctrl (initial arm), aer_done (re-arm after
- * each AEN), and nvme_fw_act_work_amiga (re-arm after firmware activation).
+ * each AEN), and nvme_fw_act_work (re-arm after firmware activation).
  */
 void nvme_submit_aer(struct NVMeController *ctrl);
 

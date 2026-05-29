@@ -91,4 +91,16 @@ int nvme_set_features(struct NVMeController *dev, unsigned int fid,
 int nvme_configure_timestamp(struct NVMeController *ctrl);
 int nvme_configure_host_options(struct NVMeController *ctrl);
 
+/*
+ * nvme_get_log - issue a Get Log Page command, synchronously or asynchronously.
+ *
+ * @done == NULL submits synchronously (result in @log on return, caller owns
+ * @log; must not be called from the admin/unit task).  @done != NULL submits
+ * asynchronously: @done fires from the completion drain, owns the request, and
+ * must free @log; @priv is recovered as req->priv.  Safe from any task.
+ */
+int nvme_get_log(struct NVMeController *ctrl, u32 nsid, u8 log_page,
+		u8 lsp, u8 csi, void *log, size_t size, u64 offset,
+		void (*done)(struct nvme_request *), void *priv);
+
 #endif /* NVME_ADMIN_H */
