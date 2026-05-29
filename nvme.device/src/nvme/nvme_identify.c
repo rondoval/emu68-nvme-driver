@@ -5,7 +5,7 @@
  * Issues the various Identify admin commands and parses the responses
  * into the driver's nvme_ns_info / nvme_id_ctrl structures.
  */
-#include <nvme/nvme.h>        /* must come first: kcompat.h establishes proto/exec.h
+#include <nvme/nvme_core.h>        /* must come first: kcompat.h establishes proto/exec.h
                           * decls before emu68-common's memory.h pool inlines */
 
 #include <types.h>

@@ -12,6 +12,7 @@
 #include <types.h>
 #include <errors.h>
 
+#include <device.h>             /* struct NVMeUnit, NVME_UNIT_DEAD */
 #include <nvme/nvme_admin.h>
 #include <nvme/nvme_constants.h>	/* nvme_get_error_status_str */
 #include <nvme/nvme_ctrl.h>		/* nvme_change_ctrl_state, nvme_init_non_mdts_limits */

@@ -29,6 +29,7 @@
 #include <debug.h>
 #include <timing.h> /* get_time, delay_us, delay_ms, time_deadline_passed */
 
+#include <device.h>          /* NVMeController/NVMeDevice/NVMeUnit, ERR_*, task_spawn, UnitTask, nvme_int_* */
 #include <nvme/nvme_admin.h> /* nvme_configure_timestamp, nvme_configure_host_options */
 #include <nvme/nvme_aen.h>   /* nvme_enable_aen, nvme_submit_aer */
 #include <nvme/nvme_ctrl.h>  /* nvme_admin_ctrl, nvme_change_ctrl_state, nvme_init_identify */
@@ -154,14 +155,11 @@ static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
     }
 }
 
-static int nvme_init_ctrl(struct NVMeController *ctrl, struct device *dev,
-                          unsigned long quirks)
+static int nvme_init_ctrl(struct NVMeController *ctrl, unsigned long quirks)
 {
     ctrl->state = NVME_CTRL_NEW;
-    ctrl->passthru_err_log_enabled = FALSE;
     _NewMinList(&ctrl->namespaces);
     InitSemaphore(&ctrl->scan_lock);
-    ctrl->dev = dev;
     ctrl->quirks = quirks;
     return 0;
 }
@@ -179,9 +177,6 @@ static int nvme_init_ctrl_finish(struct NVMeController *ctrl, BOOL was_suspended
     ctrl->vs = nvme_reg_read32(ctrl, NVME_REG_VS);
 
     ctrl->sqsize = (u16)((NVME_CAP_MQES(ctrl->cap) < (u32)ctrl->sqsize) ? NVME_CAP_MQES(ctrl->cap) : (u32)ctrl->sqsize);
-
-    if (ctrl->vs >= NVME_VS(1, 1, 0))
-        ctrl->subsystem = NVME_CAP_NSSRC(ctrl->cap);
 
     ret = nvme_init_identify(ctrl);
     if (ret)
@@ -414,7 +409,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
     }
 
     // Initialise the state machine to NEW, namespaces MinList, scan_lock semaphore.
-    nvme_init_ctrl(ctrl, NULL, 0);
+    nvme_init_ctrl(ctrl, 0);
 
     KprintfH("[nvme] %s: calling nvme_disable_ctrl (CC.EN=0, wait RDY=0)\n", __func__);
     if (nvme_disable_ctrl(ctrl, FALSE) != 0)

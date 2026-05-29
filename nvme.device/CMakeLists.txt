@@ -53,6 +53,7 @@ add_executable(nvme.device
     src/nvme/nvme_admin.c
     src/nvme/nvme_passthru.c
     src/nvme/nvme_aen.c
+    src/nvme/nvme_ctrl.c
     src/nvme/nvme_fw.c
     src/nvme/nvme_identify.c
     src/nvme/nvme_completion.c
@@ -76,4 +77,50 @@ target_link_libraries(nvme.device
 install(
     PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvme.device
     DESTINATION DEVS
+)
+
+# ------------------------------------------------------------------ #
+# SDK: public passthrough interface (devices/nvme.h) + NVMe spec      #
+# definitions (nvme/nvme_defs.h), shipped as an NVMe:: headers target #
+# with a find_package() config.  Mirrors emu68-gic400-library.        #
+# ------------------------------------------------------------------ #
+add_library(nvme_headers INTERFACE)
+target_include_directories(nvme_headers INTERFACE
+    $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+    $<INSTALL_INTERFACE:include>
+)
+target_link_libraries(nvme_headers INTERFACE Emu68Common::common)
+
+# Only the public surface is installed — internal headers (nvme_core.h,
+# device.h, kcompat.h, the other nvme/*.h) stay private.
+install(FILES include/devices/nvme.h   DESTINATION include/devices)
+install(FILES include/nvme/nvme_defs.h DESTINATION include/nvme)
+
+install(
+    TARGETS nvme_headers
+    EXPORT NVMeTargets
+)
+install(
+    EXPORT NVMeTargets
+    NAMESPACE NVMe::
+    FILE NVMeTargets.cmake
+    DESTINATION lib/cmake/NVMe
+)
+
+include(CMakePackageConfigHelpers)
+configure_package_config_file(
+    ${CMAKE_CURRENT_SOURCE_DIR}/cmake/NVMeConfig.cmake.in
+    ${CMAKE_CURRENT_BINARY_DIR}/NVMeConfig.cmake
+    INSTALL_DESTINATION lib/cmake/NVMe
+)
+write_basic_package_version_file(
+    ${CMAKE_CURRENT_BINARY_DIR}/NVMeConfigVersion.cmake
+    VERSION ${PROJECT_VERSION}
+    COMPATIBILITY SameMajorVersion
+)
+install(
+    FILES
+        ${CMAKE_CURRENT_BINARY_DIR}/NVMeConfig.cmake
+        ${CMAKE_CURRENT_BINARY_DIR}/NVMeConfigVersion.cmake
+    DESTINATION lib/cmake/NVMe
 )

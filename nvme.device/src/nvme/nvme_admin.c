@@ -22,7 +22,7 @@
 #include <timing.h>
 
 #include <device.h>
-#include <nvme/nvme.h>
+#include <nvme/nvme_core.h>
 #include <nvme/nvme_admin.h>
 #include <nvme/nvme_constants.h> /* nvme_get_admin_opcode_str, nvme_get_error_status_str */
 #include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_submit_io, nvme_req_destroy */

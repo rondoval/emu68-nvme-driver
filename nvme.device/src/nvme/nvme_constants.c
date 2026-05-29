@@ -4,7 +4,7 @@
  * Copyright (c) 2022, Oracle and/or its affiliates
  */
 
-#include <nvme/nvme.h>
+#include <nvme/nvme_core.h>
 #include <nvme/nvme_constants.h>
 
 static const char * const nvme_ops[] = {

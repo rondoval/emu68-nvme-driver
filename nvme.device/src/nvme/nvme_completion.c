@@ -7,7 +7,8 @@
  * (reply io / signal waiter / fire async done), and the complete_rq
  * conductor.
  */
-#include <nvme/nvme.h>
+#include <nvme/nvme_core.h>
+#include <device.h>             /* struct NVMeUnit (req->unit) */
 
 #include <exec/errors.h>
 #include <devices/trackdisk.h>

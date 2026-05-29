@@ -32,7 +32,8 @@
 #include <dos/dos.h>          /* SIGBREAKF_CTRL_F / SIGBREAKF_CTRL_C */
 #include <debug.h>
 
-#include <nvme/nvme.h>
+#include <device.h>             /* AdminWorker proto, ProcessCommand, NVMeController */
+#include <nvme/nvme_core.h>
 #include <nvme/nvme_fw.h>       /* nvme_fw_act_work */
 #include <nvme/nvme_passthru.h>  /* nvme_passthru_process */
 #include <nvme/nvme_scan.h>      /* nvme_scan_namespaces */

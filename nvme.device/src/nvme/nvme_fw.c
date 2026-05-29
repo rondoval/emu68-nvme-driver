@@ -11,6 +11,7 @@
 #include <types.h>
 #include <timing.h> /* get_time, delay_ms, time_deadline_passed */
 
+#include <device.h>          /* nvme_cache_inval, NVMeController */
 #include <nvme/nvme_admin.h>
 #include <nvme/nvme_constants.h> /* nvme_get_error_status_str */
 #include <nvme/nvme_ctrl.h> /* nvme_change_ctrl_state */

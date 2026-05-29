@@ -26,7 +26,7 @@
 #include <memory.h>
 
 #include <device.h>
-#include <nvme/nvme.h> /* NVME_CTRL_PAGE_SIZE */
+#include <nvme/nvme_core.h> /* NVME_CTRL_PAGE_SIZE */
 #include <nvme/nvme_io.h>
 
 /* ------------------------------------------------------------------ */

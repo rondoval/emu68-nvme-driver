@@ -31,7 +31,7 @@
 
 #include <device.h>
 #include <nvme/nvme_io.h>
-#include <nvme/nvme.h>
+#include <nvme/nvme_core.h>
 #include <nvme/nvme_constants.h> /* nvme_get_opcode_str */
 #include <nvme/nvme_queue.h> /* nvme_inflight_claim, nvme_inflight_release */
 

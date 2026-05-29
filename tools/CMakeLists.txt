@@ -41,6 +41,7 @@ target_link_libraries(nvmeinfo
 
 target_link_libraries(nvmeadm
     Emu68Common::common
+    nvme_headers          # SDK headers: <devices/nvme.h> + <nvme/nvme_defs.h>
 )
 
 target_include_directories(nvmeinfo PRIVATE
@@ -48,10 +49,6 @@ target_include_directories(nvmeinfo PRIVATE
     ${CMAKE_BINARY_DIR}/bcmpcie.library/generated/include
     # bcmpcie.library public headers (libraries/pcie.h, libraries/pci_constants.h, libraries/openpci.h, libraries/pcitags.h)
     ${CMAKE_SOURCE_DIR}/bcmpcie.library/include
-)
-
-target_include_directories(nvmeadm PRIVATE
-    ${CMAKE_CURRENT_SOURCE_DIR}/../nvme.device/include
 )
 
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvmeinfo DESTINATION C)

@@ -2,7 +2,7 @@
 #ifndef NVME_ADMIN_H
 #define NVME_ADMIN_H
 
-#include "nvme.h"                /* size_t typedef, NVMeController, nvme_command,
+#include "nvme_core.h"                /* size_t typedef, NVMeController, nvme_command,
                                     nvme_result, nvme_request, nvme_req_flags */
 
 /*
