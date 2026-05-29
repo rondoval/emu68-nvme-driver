@@ -17,7 +17,6 @@
 #include <nvme/nvme_constants.h>	/* nvme_get_error_status_str */
 #include <nvme/nvme_ctrl.h>		/* nvme_change_ctrl_state, nvme_init_non_mdts_limits */
 #include <nvme/nvme_identify.h> /* struct nvme_ns_info, nvme_identify_* */
-#include <nvme/nvme_task.h>
 #include <nvme/nvme_probe.h>	/* nvme_alloc_nvmeunit */
 #include <nvme/nvme_queue.h>	/* nvme_unquiesce_io_queues */
 #include <nvme/nvme_scan.h>

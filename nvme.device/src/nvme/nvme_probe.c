@@ -37,7 +37,6 @@
 #include <nvme/nvme_probe.h>
 #include <nvme/nvme_queue.h> /* nvme_setup_admin_queue, nvme_setup_io_queue, nvme_unquiesce_io_queues */
 #include <nvme/nvme_scan.h>  /* nvme_scan_namespaces */
-#include <nvme/nvme_task.h>
 
 /* NVMe PCI class code: Mass Storage / NVM Express (base 0x01, sub 0x08, prog-if 0x02) */
 #define NVME_PCI_CLASS 0x010802UL

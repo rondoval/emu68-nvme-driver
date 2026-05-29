@@ -17,7 +17,7 @@
 #include <nvme/nvme_ctrl.h> /* nvme_change_ctrl_state */
 #include <nvme/nvme_fw.h>
 #include <nvme/nvme_aen.h> /* nvme_submit_aer */
-#include <nvme/nvme_task.h>
+#include <nvme/nvme_probe.h>
 #include <nvme/nvme_queue.h> /* nvme_quiesce_io_queues, nvme_unquiesce_io_queues */
 
 /*

@@ -12,7 +12,9 @@
 #include <nvme/nvme_admin.h> /* nvme_set_features, nvme_submit_async_cmd */
 #include <nvme/nvme_aen.h>
 #include <nvme/nvme_ctrl.h>	   /* nvme_change_ctrl_state */
-#include <nvme/nvme_task.h>
+#include <nvme/nvme_fw.h>
+#include <nvme/nvme_probe.h>
+#include <nvme/nvme_scan.h>
 
 /*
  * nvme_aer_type - extract the AER type from an AEN completion result

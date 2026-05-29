@@ -457,7 +457,7 @@ int nvme_configure_timestamp(struct NVMeController *ctrl)
     if (!(ctrl->oncs & NVME_CTRL_ONCS_TIMESTAMP))
         return 0;
 
-    __le64 ts __attribute__((aligned(4))) = le64(ktime_to_ms(ktime_get_real()));
+    __le64 ts __attribute__((aligned(4))) = le64(nvme_unix_time_ms());
     int ret = nvme_set_features(ctrl, NVME_FEAT_TIMESTAMP, 0, &ts, sizeof(ts), NULL);
     if (ret)
         Kprintf("[nvme] %s: could not set timestamp (%ld)\n", __func__, ret);

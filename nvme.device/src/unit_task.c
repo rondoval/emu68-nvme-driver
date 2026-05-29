@@ -18,7 +18,6 @@
 #include <nvme/nvme_core.h>       /* types + inlines */
 #include <nvme/nvme_probe.h> /* nvme_reset_controller */
 #include <nvme/nvme_queue.h> /* nvme_process_completions, nvme_tick_watchdog */
-#include <nvme/nvme_task.h>
 
 /* Request an asynchronous controller reset from whichever path noticed
  * the fault; the unit task consumes reset_signal in its Wait() loop. */

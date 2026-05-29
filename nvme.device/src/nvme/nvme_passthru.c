@@ -55,7 +55,7 @@
 #include <nvme/nvme_io.h>        /* nvme_needs_bounce, DMA_ALIGN_MIN */
 #include <nvme/nvme_passthru.h>
 #include <nvme/nvme_queue.h>     /* nvme_start_freeze, nvme_wait_freeze, nvme_unfreeze */
-#include <nvme/nvme_task.h>
+#include <nvme/nvme_scan.h>
 
 /*
  * nvme_command_effects - return the Effects Log entry for a given opcode.

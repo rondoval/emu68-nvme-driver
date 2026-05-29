@@ -2,6 +2,12 @@
 #ifndef NVME_PROBE_H
 #define NVME_PROBE_H
 
+#include <types.h>
+
+struct NVMeController;
+struct NVMeDevice;
+struct NVMeUnit;
+
 /* ------------------------------------------------------------------ */
 /* Device-level probe / unprobe                                        */
 /* ------------------------------------------------------------------ */
@@ -29,6 +35,7 @@ void nvme_unprobe_all(struct NVMeDevice *base);
  * allocated controller.  Called from the unit task in response to a
  * reset_signal raised by nvme_reset_ctrl().
  */
+int nvme_reset_ctrl(struct NVMeController *ctrl);
 void nvme_reset_controller(struct NVMeController *ctrl);
 
 /* ------------------------------------------------------------------ */

@@ -37,7 +37,6 @@
 #include <nvme/nvme_fw.h>       /* nvme_fw_act_work */
 #include <nvme/nvme_passthru.h>  /* nvme_passthru_process */
 #include <nvme/nvme_scan.h>      /* nvme_scan_namespaces */
-#include <nvme/nvme_task.h>
 
 /* AdminWorker owns scan_signal and fw_act_signal; callers only need to
  * poke the task so its Wait() loop drains the queued work. */
