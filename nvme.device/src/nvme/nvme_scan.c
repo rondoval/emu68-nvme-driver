@@ -21,6 +21,21 @@
 #include <nvme/nvme_scan.h>
 
 /*
+ * nvme_lba_to_sect - convert a device LBA to a 512-byte sector number
+ *
+ * Shifts left by (lba_shift - SECTOR_SHIFT) to produce the kernel sector
+ * number corresponding to a given device LBA.
+ *
+ * @ns:  namespace whose lba_shift defines the conversion
+ * @lba:  device logical block address
+ * Returns: kernel sector number (512 B units)
+ */
+static inline u64 nvme_lba_to_sect(struct nvme_ns *ns, u64 lba)
+{
+	return lba << (ns->lba_shift - SECTOR_SHIFT);
+}
+
+/*
  * nvme_find_ns - return the controller's nvme_ns for @nsid, or NULL.
  *
  * Linear walk of ctrl->namespaces.  Both callers hold ctrl->scan_lock,

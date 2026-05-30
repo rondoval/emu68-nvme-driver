@@ -31,6 +31,21 @@
  * ---------------------------------------------------------------- */
 
 /*
+ * nvme_bytes_to_numd - convert a byte length to an NVMe 0-based NUMD value
+ *
+ * Many NVMe admin commands encode a data transfer length as Number of Dwords
+ * Minus One (NUMD).  This divides @len by 4 (bytes to dwords) then subtracts
+ * 1 to produce the 0-based value the spec requires.
+ *
+ * @len: transfer length in bytes (must be a non-zero multiple of 4)
+ * Returns: 0-based dword count suitable for the NVMe NUMD field
+ */
+static inline u32 nvme_bytes_to_numd(size_t len)
+{
+    return (len >> 2) - 1;
+}
+
+/*
  * nvme_req_alloc_admin - admin-queue counterpart of nvme_req_alloc_io.
  *
  * Picks a CID from the admin queue's per-queue inflight table and
