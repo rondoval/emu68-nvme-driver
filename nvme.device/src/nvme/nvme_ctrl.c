@@ -28,26 +28,7 @@
 #include <nvme/nvme_admin.h>      /* nvme_get_log (effects log) */
 #include <nvme/nvme_ctrl.h>
 #include <nvme/nvme_identify.h>   /* nvme_identify_ctrl, nvme_identify_ctrl_nvm, nvme_id_cns_ok */
-
-/*
- * Quirk-table entry type, retained from the Linux nvme driver.  In Linux a
- * static table of these is matched against the Identify Controller vid / model /
- * firmware strings to set per-device NVME_QUIRK_* flags.  That table and its
- * matching helpers (string_matches / quirk_matches) were never ported, so no
- * quirk table is currently populated and this definition is presently UNUSED.
- * Kept as a placeholder for if/when device-specific quirks need matching here.
- */
-struct nvme_core_quirk_entry {
-	/*
-	 * NVMe model and firmware strings are padded with spaces.  For
-	 * simplicity, strings in the quirk table are padded with NULLs
-	 * instead.
-	 */
-	u16 vid;
-	const char *mn;
-	const char *fr;
-	unsigned long quirks;
-};
+#include <nvme/nvme_quirks.h>     /* nvme_match_id_quirks (Identify-string quirks) */
 
 /* ------------------------------------------------------------------ */
 /* Controller state machine                                            */
@@ -387,6 +368,10 @@ int nvme_init_identify(struct NVMeController *ctrl)
 	}
 
 	ctrl->cntlid = le16(id->cntlid);
+
+	/* OR in quirks matched on the Identify Controller model/
+	 * firmware strings (workarounds a shared PCI ID can't express). */
+	ctrl->quirks |= nvme_match_id_quirks(id);
 
 	if (!ctrl->identified) {
 		ret = nvme_init_effects(ctrl, id);

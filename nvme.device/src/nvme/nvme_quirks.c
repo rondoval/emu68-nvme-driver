@@ -1,11 +1,18 @@
 // SPDX-License-Identifier: GPL-2.0
 /*
- * nvme_quirks.c — per-device workaround lookup (Source 1: PCI ID table).
+ * nvme_quirks.c — per-device workaround (quirk) tables and lookups.
  *
- * Ports the Linux nvme_id_table[] driver_data quirk flags into the compiled
- * driver.  nvme_probe_controller() calls nvme_lookup_quirks() and seeds
- * ctrl->quirks with the result, so the (already-wired) quirk consumers in
- * nvme_identify.c / nvme_probe.c / nvme_ctrl.c act on matching devices.
+ * Two complementary mechanisms, both ported from the Linux nvme driver, feed
+ * ctrl->quirks so the (already-wired) consumers in nvme_identify.c /
+ * nvme_probe.c / nvme_ctrl.c act on affected devices:
+ *
+ *   - nvme_lookup_quirks()   — keys on PCI vendor:device, against a table ported
+ *                              from Linux nvme_id_table[].  Called from
+ *                              nvme_probe_controller() to seed ctrl->quirks.
+ *   - nvme_match_id_quirks() — keys on the Identify Controller model/firmware
+ *                              strings, for workarounds that vary by firmware or
+ *                              model under a PCI ID shared with other devices.
+ *                              Called from nvme_init_identify().
  */
 #include <nvme/nvme_core.h>        /* must come first: exec types, ARRAY_SIZE, Kprintf */
 
@@ -232,4 +239,100 @@ unsigned long nvme_lookup_quirks(const struct pci_dev *pdev)
 		}
 	}
 	return 0;
+}
+
+/*
+ * Identify-string quirks — matched on the Identify Controller vid + model +
+ * firmware strings, for workarounds that vary by firmware/model under a PCI ID
+ * shared with other devices (which the PCI ID table above cannot distinguish).
+ */
+struct nvme_core_quirk_entry {
+	/*
+	 * NVMe model and firmware strings are space-padded; for simplicity the
+	 * strings in this table are NUL-terminated instead.  A NULL pattern is a
+	 * wildcard.
+	 */
+	u16 vid;
+	const char *mn;
+	const char *fr;
+	unsigned long quirks;
+};
+
+static const struct nvme_core_quirk_entry core_quirks[] = {
+	{
+		/*
+		 * Samsung Portable SSD X5: fails initialisation without a delay
+		 * before the readiness check.  Matched by model string because it
+		 * shares its PCI ID with the internal Samsung 970 Evo Plus, which
+		 * must NOT get this quirk — so it cannot go in the PCI ID table.
+		 * Upstream also sets NVME_QUIRK_NO_DEEPEST_PS and
+		 * NVME_QUIRK_IGNORE_DEV_SUBNQN; both are inapplicable here (this
+		 * port programs no APST/power states and never reads the SUBNQN)
+		 * and are omitted.
+		 */
+		.vid = 0x144d,
+		.mn = "Samsung Portable SSD X5",
+		.quirks = NVME_QUIRK_DELAY_BEFORE_CHK_RDY,
+	},
+};
+
+/*
+ * string_matches - compare a space-padded Identify string against a quirk pattern
+ *
+ * NVMe Identify Controller MN/FR are space-padded fixed-width; quirk patterns are
+ * NUL-terminated.  A NULL pattern is a wildcard.  Otherwise @idstr must start
+ * with @match and be space-padded to @len thereafter.  (Reimplemented without
+ * strlen, which this port does not provide.)
+ *
+ * @idstr: space-padded field from the Identify Controller response
+ * @match: NUL-terminated quirk-table pattern (may be NULL)
+ * @len:   width of the Identify field
+ * Returns: TRUE if the field matches the pattern
+ */
+static BOOL string_matches(const char *idstr, const char *match, u32 len)
+{
+	u32 i;
+
+	if (!match)
+		return TRUE;
+
+	for (i = 0; match[i]; i++)
+		if (i >= len || idstr[i] != match[i])
+			return FALSE;
+
+	for (; i < len; i++)
+		if (idstr[i] != ' ')
+			return FALSE;
+
+	return TRUE;
+}
+
+/*
+ * quirk_matches - test whether an Identify Controller response matches an entry
+ *
+ * @id: Identify Controller data from the device
+ * @q:  quirk-table entry to compare against
+ * Returns: TRUE if vid, model, and firmware all match
+ */
+static BOOL quirk_matches(const struct nvme_id_ctrl *id,
+		const struct nvme_core_quirk_entry *q)
+{
+	return q->vid == le16(id->vid) &&
+		string_matches(id->mn, q->mn, sizeof(id->mn)) &&
+		string_matches(id->fr, q->fr, sizeof(id->fr));
+}
+
+unsigned long nvme_match_id_quirks(const struct nvme_id_ctrl *id)
+{
+	unsigned long quirks = 0;
+
+	for (unsigned int i = 0; i < ARRAY_SIZE(core_quirks); i++)
+		if (quirk_matches(id, &core_quirks[i]))
+			quirks |= core_quirks[i].quirks;
+
+	if (quirks)
+		Kprintf("[nvme] %s: %04lx mn='%.40s' -> quirks 0x%lx\n",
+			__func__, (ULONG)le16(id->vid), id->mn, (ULONG)quirks);
+
+	return quirks;
 }
