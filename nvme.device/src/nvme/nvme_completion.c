@@ -72,7 +72,7 @@ static void nvme_log_err_normal(struct nvme_request *req)
 		 * commands the SQE's slba is the source of truth. */
 		if (req->ctx)
 			fail_lba = req->ctx->start_lba +
-					   ((u64)req->ctx->completed >> shift);
+					   (u64)(req->ctx->completed >> shift);
 		else
 			fail_lba = le64(req->cmd.rw.slba); /* self-inverse: LE->native */
 

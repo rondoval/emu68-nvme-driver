@@ -73,6 +73,9 @@ target_link_libraries(nvme.device
     PRIVATE
         Emu68Common::common
         Emu68PCIe::pcie_headers
+        gcc                # libgcc runtime helpers for remaining 64-bit ops on m68k,
+                           # notably nvme_scan.c's u64 LBA->sector shift (__ashldi3)
+                           # and nvme_hmb.c's 64-bit ceil-divide for hmmaxd_cap (__udivdi3)
 )
 
 install(

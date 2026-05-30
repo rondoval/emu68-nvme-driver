@@ -656,7 +656,7 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
         if (mdts && next_bytes > mdts)
             next_bytes = mdts;
         const u32 next_blocks = next_bytes >> shift;
-        const u64 next_lba = ctx->start_lba + ((u64)ctx->dispatched >> shift);
+        const u64 next_lba = ctx->start_lba + (u64)(ctx->dispatched >> shift);
         APTR next_buf = (APTR)((ULONG)ctx->user_data + ctx->dispatched);
 
         BYTE err;
