@@ -294,10 +294,12 @@ static int nvme_enable_ctrl(struct NVMeController *ctrl)
  */
 static int nvme_disable_ctrl(struct NVMeController *ctrl, BOOL shutdown)
 {
+#ifdef DEBUG_HIGH
     u32 csts_before = nvme_reg_read32(ctrl, NVME_REG_CSTS);
 
     KprintfH("[nvme] disable_ctrl(shutdown=%ld): CSTS_before=%08lx CC_before=%08lx\n",
              (LONG)shutdown, csts_before, ctrl->ctrl_config);
+#endif
 
     ctrl->ctrl_config &= ~(u32)NVME_CC_SHN_MASK;
     if (shutdown)

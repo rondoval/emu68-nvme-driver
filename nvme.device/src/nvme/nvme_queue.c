@@ -387,7 +387,9 @@ s32 nvme_setup_admin_queue(struct NVMeController *ctrl)
     /* Doorbell stride = 4 << CAP.DSTRD (DSTRD in CAP[35:32], so bits
      * [3:0] of the high dword).  Must be read before nvme_setup_queue
      * because each queue's sq_db_off / cq_db_off depend on it. */
+#ifdef DEBUG_HIGH     
     u32 cap_lo = mmio_read32(bar + NVME_REG_CAP);
+#endif
     u32 cap_hi = mmio_read32(bar + NVME_REG_CAP + 4);
     u32 dstrd = cap_hi & 0xF;
     ctrl->db_stride = 4UL << dstrd;
@@ -458,9 +460,11 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     }
     /* Result dword0: NSQA in [15:0], NCQA in [31:16].  Both are
      * 0-based, so 0 means "1 queue granted". */
+#ifdef DEBUG_HIGH
     u32 num_queues = le32(result.u32);
     KprintfH("[nvme] %s: granted NSQA=%lu NCQA=%lu (both 0-based; we need 1+1)\n",
              __func__, num_queues & 0xFFFF, num_queues >> 16);
+#endif
 
     /* Step 2: allocate rings + inflight table for the I/O queue. */
     if (nvme_setup_queue(ctrl, &ctrl->io_q, NVME_IO_QID, NVME_IO_QUEUE_SIZE) != 0)

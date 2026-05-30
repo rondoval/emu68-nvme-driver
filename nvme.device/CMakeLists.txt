@@ -22,7 +22,6 @@ add_compile_options(
     -Wstrict-prototypes
     -DDEBUG
     -fomit-frame-pointer
-    -DDEBUG_HIGH
 )
 
 add_compile_definitions(

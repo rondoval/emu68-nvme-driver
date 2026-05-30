@@ -73,7 +73,9 @@ static u32 nvme_command_effects(struct NVMeController *ctrl, struct nvme_ns *ns,
     {
         effects = le32(ns->effects->iocs[opcode]);
         if (effects & ~(u32)(NVME_CMD_EFFECTS_CSUPP | NVME_CMD_EFFECTS_LBCC))
+        {
             KprintfH("[nvme] IO command:%02lx has unusual effects:%08lx\n", opcode, effects);
+        }
 
         /* CSE bits would request an I/O-queue freeze, which would
          * self-deadlock if requested by an I/O-side command. */
@@ -158,9 +160,11 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     enum nvme_ctrl_state state = nvme_ctrl_state(ctrl);
     if (state != NVME_CTRL_LIVE)
     {
+#ifdef DEBUG_HIGH
         BOOL terminal = nvme_state_terminal(ctrl);
         KprintfH("[nvme] passthru: ctrl not LIVE (state=%ld) — rejecting %s\n",
                  (LONG)state, terminal ? "terminally" : "transiently");
+#endif
         reply_passthru(io, IOERR_UNITBUSY);
         return;
     }
