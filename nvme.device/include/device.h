@@ -71,6 +71,11 @@ struct NVMeUnit
     ULONG blockSize;
     ULONG blockShift; /* log2(blockSize) */
     u64 logicalSectors;
+
+    /* Media-change counter reported by TD_CHANGENUM and checked against the
+     * caller's iotd_Count on ETD_* commands.  Fixed media: initialised to 1 at
+     * alloc so a stale iotd_Count of 0 is rejected (TDERR_DiskChanged). */
+    ULONG changeCount;
 };
 
 /* NVMeUnit flag bits.  Read by openLib / UnitOpen / beginIO / ProcessCommand;

@@ -125,6 +125,33 @@ static void do_td_getgeometry(struct IOStdReq *io, struct NVMeUnit *unit)
 }
 
 /*
+ * nvme_cmd_is_etd - TRUE for extended (ETD_*) commands carrying a struct IOExtTD
+ *
+ * These commands embed an iotd_Count (the caller's view of the media-change
+ * counter) after the IOStdReq, so beginIO may validate it.  A bare
+ * (cmd & TDF_EXTCOM) test is unusable: the NSCMD_*64 values also set bit 15.
+ */
+static inline BOOL nvme_cmd_is_etd(UWORD cmd)
+{
+    switch (cmd)
+    {
+    case ETD_READ:
+    case ETD_WRITE:
+    case ETD_MOTOR:
+    case ETD_SEEK:
+    case ETD_FORMAT:
+    case ETD_UPDATE:
+    case ETD_CLEAR:
+    case NSCMD_ETD_READ64:
+    case NSCMD_ETD_WRITE64:
+    case NSCMD_ETD_FORMAT64:
+        return TRUE;
+    default:
+        return FALSE;
+    }
+}
+
+/*
  * beginIO - dispatch an I/O request for nvme.device.
  *
  * Trivial commands that only read cached state or set flags are handled
@@ -154,18 +181,34 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
         return;
     }
 
+    /* Extended (ETD_*) commands carry a struct IOExtTD whose iotd_Count is the
+     * caller's view of the media-change counter.  If it is older than the
+     * unit's current count, the caller's media assumptions are stale, so fail
+     * with TDERR_DiskChanged per the trackdisk ETD contract. */
+    if (nvme_cmd_is_etd(io->io_Command) &&
+        ((struct IOExtTD *)io)->iotd_Count < unit->changeCount)
+    {
+        io->io_Error = TDERR_DiskChanged;
+        if (!(io->io_Flags & IOF_QUICK))
+            ReplyMsg((struct Message *)io);
+        return;
+    }
+
     switch (io->io_Command)
     {
     case TD_MOTOR: /* NVMe drives have no spindle motor; always report success */
     case ETD_MOTOR:
     case CMD_CLEAR: /* No explicit cache update */
     case ETD_CLEAR:
-    case TD_CHANGENUM: /* Fixed media: no media changes */
-    case TD_CHANGESTATE:
+    case TD_CHANGESTATE: /* Fixed media: always present (0 = disk inserted) */
     case TD_PROTSTATUS:   /* NVMe drives are not write-protected by default */
     case TD_ADDCHANGEINT: /* Fixed media: no change interrupts. */
     case TD_REMCHANGEINT: /* Nothing to remove for fixed media */
         io->io_Actual = 0;
+        break;
+
+    case TD_CHANGENUM: /* Current media-change counter (constant for fixed media) */
+        io->io_Actual = unit->changeCount;
         break;
 
     case TD_EJECT:        /* Fixed media: no eject */

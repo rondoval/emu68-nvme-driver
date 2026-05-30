@@ -538,6 +538,7 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
     unit->blockSize = blockSize;
     unit->blockShift = blockShift;
     unit->logicalSectors = logicalSectors;
+    unit->changeCount = 1; /* present media; iotd_Count of 0 is "stale" */
 
     /* base->units is walked lockless by openLib (device.c) and now mutated
      * from the rescan path too — Forbid around the unit-number assignment
