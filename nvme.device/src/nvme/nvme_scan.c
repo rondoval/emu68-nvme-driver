@@ -74,6 +74,44 @@ static BOOL nvme_ns_ids_equal(struct nvme_ns_ids *a, struct nvme_ns_ids *b)
 }
 
 /*
+ * nvme_ns_ids_duplicate - test whether a namespace's identifiers collide with
+ * an already-registered namespace on this controller
+ *
+ * Mirrors Linux nvme_subsys_check_duplicate_ids(): two distinct namespaces
+ * reporting the same non-zero EUI64/NGUID/UUID is impossible per spec, so it
+ * means the controller is reporting bogus identifiers.  Only non-zero
+ * identifiers are compared (an all-zero "no ID reported" field is legitimate
+ * and common); CSI is intentionally excluded.
+ *
+ * @ctrl: controller whose existing namespaces to scan
+ * @ids:  candidate identifiers for the namespace being added
+ * Returns: TRUE if any non-zero identifier already exists on another namespace
+ */
+static BOOL nvme_ns_ids_duplicate(struct NVMeController *ctrl,
+								  const struct nvme_ns_ids *ids)
+{
+	BOOL has_eui64 = memchr_inv(ids->eui64, 0, sizeof(ids->eui64)) != NULL;
+	BOOL has_nguid = memchr_inv(ids->nguid, 0, sizeof(ids->nguid)) != NULL;
+	BOOL has_uuid = memchr_inv(ids->uuid, 0, sizeof(ids->uuid)) != NULL;
+
+	if (!has_eui64 && !has_nguid && !has_uuid)
+		return FALSE; /* no identifiers reported: nothing is "duplicate" */
+
+	for (struct MinNode *node = ctrl->namespaces.mlh_Head;
+		 node->mln_Succ != NULL; node = node->mln_Succ)
+	{
+		struct nvme_ns *ns = (struct nvme_ns *)node;
+		if (has_eui64 && memcmp(ids->eui64, ns->ids.eui64, sizeof(ids->eui64)) == 0)
+			return TRUE;
+		if (has_nguid && memcmp(ids->nguid, ns->ids.nguid, sizeof(ids->nguid)) == 0)
+			return TRUE;
+		if (has_uuid && memcmp(ids->uuid, ns->ids.uuid, sizeof(ids->uuid)) == 0)
+			return TRUE;
+	}
+	return FALSE;
+}
+
+/*
  * nvme_update_ns_info - commit gathered namespace info to the nvme_ns
  *
  * All Identify data was already fetched by nvme_identify_ns_info(), so this
@@ -133,6 +171,21 @@ static void nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
  */
 static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info)
 {
+	/* Reactive bogus-NID detection: if this namespace's non-zero
+	 * identifiers collide with one already on the controller, the device is
+	 * reporting garbage NIDs.  Clear them and latch the quirk so every later
+	 * namespace skips identifier parsing for the controller's lifetime. */
+	if (!(ctrl->quirks & NVME_QUIRK_BOGUS_NID) &&
+		nvme_ns_ids_duplicate(ctrl, &info->ids))
+	{
+		Kprintf("[nvme] %s: duplicate IDs for nsid %lu; "
+				"enabling bogus-NID quirk\n", __func__, info->nsid);
+		mem_zero(info->ids.eui64, sizeof(info->ids.eui64));
+		mem_zero(info->ids.nguid, sizeof(info->ids.nguid));
+		mem_zero(info->ids.uuid, sizeof(info->ids.uuid));
+		ctrl->quirks |= NVME_QUIRK_BOGUS_NID;
+	}
+
 	struct nvme_ns *ns = pool_zalloc(ctrl->memoryPool, sizeof(*ns));
 	if (!ns)
 		return;
