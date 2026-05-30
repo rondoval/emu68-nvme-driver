@@ -7,15 +7,9 @@
 #define __attribute__(x)
 #endif
 
-#include <exec/devices.h>
-#include <exec/types.h>
+#include <types.h>   /* u64 / s32 used in the struct + prototype declarations below */
 
-#include "nvme/kcompat.h"
-#include "nvme/nvme_core.h" /* struct NVMeController / nvme_queue / enum nvme_ctrl_state */
-
-#include <types.h>
-
-#include "config.h"
+struct NVMeController;
 
 #define LIB_MIN_VERSION 39 /* we use memory pools */
 #define DEVICE_PRIORITY 90

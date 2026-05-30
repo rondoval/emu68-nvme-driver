@@ -24,15 +24,12 @@
 #endif
 
 #include <exec/errors.h>
-#include <debug.h>
-#include <memory.h>
-#include <iomem.h>
 #include <timing.h>
 
 #include <device.h>
+#include <nvme/nvme_ctrl.h> /* struct NVMeController, nvme_ctrl_state, nvme_state_terminal */
+#include <nvme/nvme_completion.h>
 #include <nvme/nvme_io.h>
-#include <nvme/nvme_core.h>
-#include <nvme/nvme_constants.h> /* nvme_get_opcode_str */
 #include <nvme/nvme_queue.h> /* nvme_inflight_claim, nvme_inflight_release */
 
 #define NVME_PRP_ENTRIES_PER_PAGE (NVME_CTRL_PAGE_SIZE / sizeof(u64)) /* 512 */

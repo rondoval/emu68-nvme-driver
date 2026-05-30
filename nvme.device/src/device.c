@@ -10,7 +10,6 @@
 #include <proto/bcmpcie.h>
 #endif
 
-#include <exec/types.h>
 #include <exec/resident.h>
 #include <exec/io.h>
 #include <exec/devices.h>
@@ -19,12 +18,10 @@
 
 #include <libraries/openpci.h>
 #include <minlist.h>
-#include <debug.h>
 
-#include <device.h>
-#include <config.h>
-#include <nvme/nvme_probe.h>
-#include <mounter.h>
+#include "device.h"
+#include "nvme/nvme_probe.h"
+#include "mounter.h"
 
 /*
  * Placed first so that accidentally running the device as a program
@@ -48,7 +45,7 @@ static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase 
 APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *_SysBase asm("a6"));
 static const APTR funcTable[];
 
-static struct Resident const nvmeDeviceResident __attribute__((used,no_reorder)) = {
+static struct Resident const nvmeDeviceResident __attribute__((used, no_reorder)) = {
     RTC_MATCHWORD,
     (struct Resident *)&nvmeDeviceResident,
     (APTR)&endOfCode,
@@ -158,7 +155,6 @@ static s32 nvme_open_libraries(struct NVMeDevice *base)
 APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *_SysBase asm("a6"))
 {
     (void)_SysBase;
-    Kprintf("[nvme] %s: initializing device\n", __func__);
     base->segList = segList;
     base->device.dd_Library.lib_IdString = (APTR)deviceIdString;
     base->device.dd_Library.lib_Version = DEVICE_VERSION;
@@ -189,12 +185,11 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
 static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
                     ULONG flags asm("d1"), struct NVMeDevice *base asm("a6"))
 {
-    Kprintf("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
+    KprintfH("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
 
     /* Probe once: enumerate all NVMe controllers and build the unit list */
     if (!base->probed)
     {
-        Kprintf("[nvme] %s: first open, probing for controllers\n", __func__);
         if (nvme_open_libraries(base) != ERR_NO_ERROR)
         {
             Kprintf("[nvme] %s: failed to open support libraries\n", __func__);
@@ -232,7 +227,6 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
 
     if (unit == NULL)
     {
-        Kprintf("[nvme] %s: no unit %ld found\n", __func__, unitNumber);
         io->io_Error = IOERR_OPENFAIL;
         return;
     }
@@ -242,7 +236,7 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
 
     if (result == ERR_NO_ERROR)
     {
-        Kprintf("[nvme] %s: unit %ld opened (openCnt=%lu)\n", __func__, unitNumber, (ULONG)unit->unit.unit_OpenCnt);
+        KprintfH("[nvme] %s: unit %ld opened (openCnt=%lu)\n", __func__, unitNumber, (ULONG)unit->unit.unit_OpenCnt);
         io->io_Unit = (struct Unit *)unit;
         base->device.dd_Library.lib_OpenCnt++;
         base->device.dd_Library.lib_Flags &= (UBYTE)~LIBF_DELEXP;
@@ -257,7 +251,6 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
 
 static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
 {
-    Kprintf("[nvme] %s: expunge\n", __func__);
     if (base->device.dd_Library.lib_OpenCnt > 0)
     {
         base->device.dd_Library.lib_Flags |= LIBF_DELEXP;
@@ -285,7 +278,7 @@ static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
 static ULONG closeLib(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6"))
 {
     struct NVMeUnit *unit = (struct NVMeUnit *)io->io_Unit;
-    Kprintf("[nvme] %s: closing unit %ld\n", __func__, unit->unitNumber);
+    KprintfH("[nvme] %s: closing unit %ld\n", __func__, unit->unitNumber);
 
     /* UnitClose handles hardware teardown on last close; the NVMeUnit
      * struct itself is NOT freed — it lives until expungeLib. */

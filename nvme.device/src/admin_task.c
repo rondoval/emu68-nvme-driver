@@ -29,14 +29,13 @@
 #include <proto/exec.h>
 #endif
 
-#include <dos/dos.h>          /* SIGBREAKF_CTRL_F / SIGBREAKF_CTRL_C */
-#include <debug.h>
+#include <dos/dos.h> /* SIGBREAKF_CTRL_F / SIGBREAKF_CTRL_C */
 
-#include <device.h>             /* AdminWorker proto, ProcessCommand, NVMeController */
-#include <nvme/nvme_core.h>
-#include <nvme/nvme_fw.h>       /* nvme_fw_act_work */
-#include <nvme/nvme_passthru.h>  /* nvme_passthru_process */
-#include <nvme/nvme_scan.h>      /* nvme_scan_namespaces */
+#include "device.h"             /* AdminWorker proto, ProcessCommand, NVMeController */
+#include "nvme/nvme_ctrl.h"     /* struct NVMeController, NVME_CTRL_* flags */
+#include "nvme/nvme_fw.h"       /* nvme_fw_act_work */
+#include "nvme/nvme_passthru.h" /* nvme_passthru_process */
+#include "nvme/nvme_scan.h"     /* nvme_scan_namespaces */
 
 /* AdminWorker owns scan_signal and fw_act_signal; callers only need to
  * poke the task so its Wait() loop drains the queued work. */
@@ -67,19 +66,22 @@ void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
              (ULONG)ctrl, (ULONG)parent);
 
     ctrl->adminPort = CreateMsgPort();
-    if (!ctrl->adminPort) {
+    if (!ctrl->adminPort)
+    {
         Kprintf("[nvme] %s: failed to create admin port\n", __func__);
         goto fail;
     }
 
     ctrl->scan_signal = AllocSignal(-1);
-    if (ctrl->scan_signal == -1) {
+    if (ctrl->scan_signal == -1)
+    {
         Kprintf("[nvme] %s: failed to allocate scan signal\n", __func__);
         goto free_admin_port;
     }
 
     ctrl->fw_act_signal = AllocSignal(-1);
-    if (ctrl->fw_act_signal == -1) {
+    if (ctrl->fw_act_signal == -1)
+    {
         Kprintf("[nvme] %s: failed to allocate fw_act signal\n", __func__);
         goto free_scan_signal;
     }
@@ -90,10 +92,7 @@ void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
     Kprintf("[nvme] %s: admin worker running (port=%lx)\n",
             __func__, (ULONG)ctrl->adminPort);
 
-    ULONG waitMask = (1UL << ctrl->adminPort->mp_SigBit)
-                   | (1UL << ctrl->scan_signal)
-                   | (1UL << ctrl->fw_act_signal)
-                   | SIGBREAKF_CTRL_C;
+    ULONG waitMask = (1UL << ctrl->adminPort->mp_SigBit) | (1UL << ctrl->scan_signal) | (1UL << ctrl->fw_act_signal) | SIGBREAKF_CTRL_C;
     ULONG sigset;
 
     do

@@ -9,12 +9,11 @@
  * concurrently.
  */
 
-#include <types.h>
 #include <errors.h>
 
-#include <device.h>             /* struct NVMeUnit, NVME_UNIT_DEAD */
+#include <nvme/nvme_core.h> /* must come first: device.h pulls in kcompat.h */
+#include <device.h>			/* struct NVMeUnit, NVME_UNIT_DEAD */
 #include <nvme/nvme_admin.h>
-#include <nvme/nvme_constants.h>	/* nvme_get_error_status_str */
 #include <nvme/nvme_ctrl.h>		/* nvme_change_ctrl_state, nvme_init_non_mdts_limits */
 #include <nvme/nvme_identify.h> /* struct nvme_ns_info, nvme_identify_* */
 #include <nvme/nvme_probe.h>	/* nvme_alloc_nvmeunit */
@@ -54,9 +53,9 @@ static struct nvme_ns *nvme_find_ns(struct NVMeController *ctrl, u32 nsid)
 static BOOL nvme_ns_ids_equal(struct nvme_ns_ids *a, struct nvme_ns_ids *b)
 {
 	return memcmp(&a->uuid, &b->uuid, NVME_NIDT_UUID_LEN) == 0 &&
-		memcmp(&a->nguid, &b->nguid, sizeof(a->nguid)) == 0 &&
-		memcmp(&a->eui64, &b->eui64, sizeof(a->eui64)) == 0 &&
-		a->csi == b->csi;
+		   memcmp(&a->nguid, &b->nguid, sizeof(a->nguid)) == 0 &&
+		   memcmp(&a->eui64, &b->eui64, sizeof(a->eui64)) == 0 &&
+		   a->csi == b->csi;
 }
 
 /*
@@ -75,9 +74,10 @@ static BOOL nvme_ns_ids_equal(struct nvme_ns_ids *a, struct nvme_ns_ids *b)
  */
 static void nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
 {
-	if (info->ids.csi != NVME_CSI_NVM) {
+	if (info->ids.csi != NVME_CSI_NVM)
+	{
 		Kprintf("[nvme] %s: block device for nsid %lu not supported (csi %lu)\n",
-			__func__, info->nsid, info->ids.csi);
+				__func__, info->nsid, info->ids.csi);
 		set_bit(NVME_NS_READY, &ns->flags);
 		return;
 	}
@@ -93,13 +93,13 @@ static void nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
 		ns->features |= NVME_NS_DEAC;
 
 	if (info->ms == 0 && info->pi_type == 0 &&
-	    ns->lba_shift >= 9 && ns->lba_shift <= 12)
+		ns->lba_shift >= 9 && ns->lba_shift <= 12)
 		ns->disk_capacity_sectors = nvme_lba_to_sect(ns, info->nsze);
 	else
 		Kprintf("[nvme] %s: nsid %lu not a plain block ns "
-			"(ms=%lu pi=%lu ds=%lu) - no block I/O\n",
-			__func__, info->nsid, (ULONG)info->ms,
-			(ULONG)info->pi_type, (ULONG)ns->lba_shift);
+				"(ms=%lu pi=%lu ds=%lu) - no block I/O\n",
+				__func__, info->nsid, (ULONG)info->ms,
+				(ULONG)info->pi_type, (ULONG)ns->lba_shift);
 
 	set_bit(NVME_NS_READY, &ns->flags);
 }
@@ -304,7 +304,7 @@ static int nvme_scan_ns_list(struct NVMeController *ctrl)
 		if (ret)
 		{
 			Kprintf("[nvme] %s: Identify NS List failed (status=0x%lx (%s))\n",
-				__func__, ret, nvme_get_error_status_str((u16)ret));
+					__func__, ret, nvme_get_error_status_str((u16)ret));
 			goto free;
 		}
 

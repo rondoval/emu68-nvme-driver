@@ -11,13 +11,11 @@
 
 #include <dos/dos.h>
 #include <minlist.h>
-#include <debug.h>
 
-#include <device.h>
-#include <config.h>
-#include <nvme/nvme_core.h>       /* types + inlines */
-#include <nvme/nvme_probe.h> /* nvme_reset_controller */
-#include <nvme/nvme_queue.h> /* nvme_process_completions, nvme_tick_watchdog */
+#include "device.h"
+#include "nvme/nvme_ctrl.h"  /* struct NVMeController, nvme_ctrl_state */
+#include "nvme/nvme_probe.h" /* nvme_reset_controller */
+#include "nvme/nvme_queue.h" /* nvme_process_completions, nvme_tick_watchdog */
 
 /* Request an asynchronous controller reset from whichever path noticed
  * the fault; the unit task consumes reset_signal in its Wait() loop. */
@@ -25,7 +23,8 @@ int nvme_reset_ctrl(struct NVMeController *ctrl)
 {
     struct NVMeController *ac = ctrl ? ctrl : NULL;
 
-    if (!ac || !ac->unit_task) {
+    if (!ac || !ac->unit_task)
+    {
         Kprintf("[nvme] reset_ctrl: no task to signal\n");
         return -1;
     }
@@ -197,7 +196,7 @@ s32 task_spawn(struct NVMeController *ctrl,
                task_entry entry,
                const char *name)
 {
-    Kprintf("[nvme] %s: starting %s\n", __func__, name);
+    KprintfH("[nvme] %s: starting %s\n", __func__, name);
 
     struct MemList *ml = AllocMem(sizeof(struct MemList) + sizeof(struct MemEntry),
                                   MEMF_PUBLIC | MEMF_CLEAR);
@@ -257,7 +256,6 @@ s32 task_spawn(struct NVMeController *ctrl,
         return ERR_CONTROLLER_ERROR;
     }
 
-    Kprintf("[nvme] %s: %s started\n", __func__, name);
     return ERR_NO_ERROR;
 }
 
@@ -273,7 +271,7 @@ void task_join(struct Task **slot)
     if (!slot || !*slot)
         return;
 
-    Kprintf("[nvme] %s: stopping task=%lx\n", __func__, (ULONG)*slot);
+    KprintfH("[nvme] %s: stopping task=%lx\n", __func__, (ULONG)*slot);
 
     struct MsgPort *timerPort = CreateMsgPort();
     struct timerequest *timerReq = CreateIORequest(timerPort, sizeof(struct timerequest));
@@ -309,6 +307,4 @@ void task_join(struct Task **slot)
         DeleteIORequest(&timerReq->tr_node);
     if (timerPort)
         DeleteMsgPort(timerPort);
-
-    Kprintf("[nvme] %s: task stopped\n", __func__);
 }

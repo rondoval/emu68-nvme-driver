@@ -9,9 +9,12 @@
  * the controller has another outstanding slot to report the next event)
  * happens by calling nvme_submit_aer() directly from the aer_done callback.
  */
+
+#include <nvme/nvme_core.h>
+#include <nvme/nvme_completion.h>
 #include <nvme/nvme_admin.h> /* nvme_set_features, nvme_submit_async_cmd */
 #include <nvme/nvme_aen.h>
-#include <nvme/nvme_ctrl.h>	   /* nvme_change_ctrl_state */
+#include <nvme/nvme_ctrl.h> /* nvme_change_ctrl_state */
 #include <nvme/nvme_fw.h>
 #include <nvme/nvme_probe.h>
 #include <nvme/nvme_scan.h>
@@ -82,8 +85,7 @@ static BOOL nvme_handle_aen_notice(struct NVMeController *ctrl, u32 result)
 		ctrl->aen_result = result;
 		break;
 	default:
-		Kprintf("[nvme] %s: async event result %08lx\n",
-			__func__, (ULONG)result);
+		KprintfH("[nvme] %s: async event result %08lx\n", __func__, (ULONG)result);
 	}
 	return requeue;
 }

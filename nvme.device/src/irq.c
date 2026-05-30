@@ -10,9 +10,8 @@
 #include <proto/bcmpcie.h>
 #endif
 
-#include <iomem.h>
-
-#include <device.h>
+#include "nvme/nvme_ctrl.h"
+#include "device.h"
 
 /*
  * nvme_int_isr - NVMe interrupt service routine.

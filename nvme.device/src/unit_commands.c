@@ -12,12 +12,11 @@
 #include <devices/trackdisk.h>
 #include <devices/newstyle.h>
 #include <devices/scsidisk.h>
-#include <debug.h>
-#include <memory.h>
 
-#include <device.h>
-#include <nvme/nvme_admin.h> /* nvme_io_abort */
-#include <nvme/nvme_io.h>
+#include "device.h"
+#include "nvme/nvme_ctrl.h"  /* struct NVMeController */
+#include "nvme/nvme_admin.h" /* nvme_io_abort */
+#include "nvme/nvme_io.h"
 
 /*
  * reply_io - set error code and reply an IOStdReq.
@@ -67,7 +66,8 @@ void ProcessCommand(struct IOStdReq *io)
      * PutMsg'd, and then the unit got marked dead before we picked the
      * message up.  Re-check here so the gone-namespace I/O fails cleanly
      * instead of dispatching to a controller that no longer has the NSID. */
-    if (unit->flags & NVME_UNIT_DEAD) {
+    if (unit->flags & NVME_UNIT_DEAD)
+    {
         io->io_Error = TDERR_DiskChanged;
         ReplyMsg((struct Message *)io);
         return;
@@ -188,7 +188,8 @@ void ProcessCommand(struct IOStdReq *io)
          * normal completion path. */
         struct IOStdReq *target = (struct IOStdReq *)io->io_Data;
         KprintfH("[nvme] %s: internal abort target=%lx\n", __func__, (ULONG)target);
-        if (unit && unit->ctrl) {
+        if (unit && unit->ctrl)
+        {
             (void)nvme_io_abort(unit->ctrl, target);
             if (unit->ctrl->memoryPool)
                 pool_free(unit->ctrl->memoryPool, io);

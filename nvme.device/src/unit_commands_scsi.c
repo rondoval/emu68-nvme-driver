@@ -22,12 +22,10 @@
 #include <exec/io.h>
 #include <devices/scsidisk.h>
 #include <devices/trackdisk.h>
-#include <debug.h>
-#include <memory.h>
 
-#include <device.h>
-#include <nvme/nvme_core.h> /* NVME_CTRL_PAGE_SIZE */
-#include <nvme/nvme_io.h>
+#include "device.h"
+#include "nvme/nvme_ctrl.h" /* struct NVMeController */
+#include "nvme/nvme_io.h"
 
 /* ------------------------------------------------------------------ */
 /* SCSI CDB opcodes (SPC-4 / SBC-3).                                   */

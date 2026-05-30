@@ -33,8 +33,7 @@
 #include <proto/exec.h>
 #endif
 
-#include <debug.h>
-
+#include <nvme/nvme_ctrl.h> /* struct NVMeController */
 #include <device.h>
 #include <nvme/nvme_hmb.h>
 #include <nvme/nvme_admin.h>
@@ -270,12 +269,8 @@ static void hmb_chunks_free(struct NVMeController *ctrl)
  */
 void nvme_setup_host_mem(struct NVMeController *ctrl)
 {
-    KprintfH("[nvme] %s: ctrl=%lx\n", __func__, (ULONG)ctrl);
     if (!ctrl)
-    {
-        Kprintf("[nvme] %s: NULL controller\n", __func__);
         return;
-    }
 
     if (ctrl->hmpre == 0)
     {

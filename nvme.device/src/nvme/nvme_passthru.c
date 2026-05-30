@@ -47,14 +47,13 @@
 
 #include <exec/errors.h>
 #include <devices/nvme.h>
-#include <debug.h>
-#include <memory.h>              /* dma_alloc / dma_free */
 
-#include <nvme/nvme_admin.h>     /* nvme_submit_sync_cmd */
-#include <nvme/nvme_constants.h> /* nvme_get_admin_opcode_str, nvme_get_error_status_str */
-#include <nvme/nvme_io.h>        /* nvme_needs_bounce, DMA_ALIGN_MIN */
+#include <nvme/nvme_ctrl.h>     /* struct NVMeController, nvme_ctrl_state, nvme_state_terminal */
+#include <nvme/nvme_identify.h> /* struct nvme_ns */
+#include <nvme/nvme_admin.h>    /* nvme_submit_sync_cmd */
+#include <nvme/nvme_io.h>       /* nvme_needs_bounce, DMA_ALIGN_MIN */
 #include <nvme/nvme_passthru.h>
-#include <nvme/nvme_queue.h>     /* nvme_start_freeze, nvme_wait_freeze, nvme_unfreeze */
+#include <nvme/nvme_queue.h> /* nvme_start_freeze, nvme_wait_freeze, nvme_unfreeze */
 #include <nvme/nvme_scan.h>
 
 /*
@@ -70,16 +69,18 @@ static u32 nvme_command_effects(struct NVMeController *ctrl, struct nvme_ns *ns,
 {
     u32 effects = 0;
 
-    if (ns) {
+    if (ns)
+    {
         effects = le32(ns->effects->iocs[opcode]);
         if (effects & ~(u32)(NVME_CMD_EFFECTS_CSUPP | NVME_CMD_EFFECTS_LBCC))
-            Kprintf("[nvme] IO command:%02lx has unusual effects:%08lx\n",
-                opcode, effects);
+            KprintfH("[nvme] IO command:%02lx has unusual effects:%08lx\n", opcode, effects);
 
         /* CSE bits would request an I/O-queue freeze, which would
          * self-deadlock if requested by an I/O-side command. */
         effects &= ~(u32)NVME_CMD_EFFECTS_CSE_MASK;
-    } else {
+    }
+    else
+    {
         effects = le32(ctrl->effects->acs[opcode]);
 
         /* Honour the controller's CSER relaxation flags. */
@@ -102,7 +103,8 @@ static u32 nvme_passthru_start(struct NVMeController *ctrl, struct nvme_ns *ns, 
 {
     u32 effects = nvme_command_effects(ctrl, ns, opcode);
 
-    if (effects & NVME_CMD_EFFECTS_CSE_MASK) {
+    if (effects & NVME_CMD_EFFECTS_CSE_MASK)
+    {
         nvme_start_freeze(ctrl);
         nvme_wait_freeze(ctrl);
     }
@@ -124,7 +126,8 @@ static void nvme_passthru_end(struct NVMeController *ctrl, u32 effects)
     if (effects & NVME_CMD_EFFECTS_CSE_MASK)
         nvme_unfreeze(ctrl);
 
-    if (effects & NVME_CMD_EFFECTS_CCC) {
+    if (effects & NVME_CMD_EFFECTS_CCC)
+    {
         if (!test_and_set_bit(NVME_CTRL_DIRTY_CAPABILITY, &ctrl->flags))
             Kprintf("[nvme] controller capabilities changed, reset may be required to take effect.\n");
     }
@@ -153,10 +156,11 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
      * the admin queue is carrying init traffic that user commands must
      * not race; during DELETING/DEAD the controller is gone. */
     enum nvme_ctrl_state state = nvme_ctrl_state(ctrl);
-    if (state != NVME_CTRL_LIVE) {
+    if (state != NVME_CTRL_LIVE)
+    {
         BOOL terminal = nvme_state_terminal(ctrl);
-        Kprintf("[nvme] passthru: ctrl not LIVE (state=%ld) — rejecting %s\n",
-                (LONG)state, terminal ? "terminally" : "transiently");
+        KprintfH("[nvme] passthru: ctrl not LIVE (state=%ld) — rejecting %s\n",
+                 (LONG)state, terminal ? "terminally" : "transiently");
         reply_passthru(io, IOERR_UNITBUSY);
         return;
     }

@@ -24,11 +24,10 @@
 #include <libraries/pcitags.h>
 #include <utility/tagitem.h>
 
-#include <types.h>
 #include <minlist.h>
-#include <debug.h>
 #include <timing.h> /* get_time, delay_us, delay_ms, time_deadline_passed */
 
+#include <nvme/nvme_completion.h>
 #include <device.h>          /* NVMeController/NVMeDevice/NVMeUnit, ERR_*, task_spawn, UnitTask, nvme_int_* */
 #include <nvme/nvme_admin.h> /* nvme_configure_timestamp, nvme_configure_host_options */
 #include <nvme/nvme_aen.h>   /* nvme_enable_aen, nvme_submit_aer */
@@ -123,8 +122,8 @@ static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
     u32 deadline_us = start_us + timeout * 1000000U;
     int polls = 0;
 
-    Kprintf("[nvme] wait_ready(%s): mask=%08lx val=%08lx timeout=%lu s\n",
-            op, (ULONG)mask, (ULONG)val, (ULONG)timeout);
+    KprintfH("[nvme] wait_ready(%s): mask=%08lx val=%08lx timeout=%lu s\n",
+             op, (ULONG)mask, (ULONG)val, (ULONG)timeout);
 
     for (;;)
     {
@@ -222,7 +221,7 @@ static int nvme_init_ctrl_finish(struct NVMeController *ctrl, BOOL was_suspended
 static int nvme_enable_ctrl(struct NVMeController *ctrl)
 {
     ctrl->cap = nvme_reg_read64(ctrl, NVME_REG_CAP);
-    Kprintf("[nvme] enable_ctrl: CAP=%08lx%08lx\n", (u32)(ctrl->cap >> 32), (u32)ctrl->cap);
+    KprintfH("[nvme] enable_ctrl: CAP=%08lx%08lx\n", (u32)(ctrl->cap >> 32), (u32)ctrl->cap);
     unsigned dev_page_min = NVME_CAP_MPSMIN(ctrl->cap) + 12;
 
     if (NVME_CTRL_PAGE_SHIFT < dev_page_min)
@@ -273,9 +272,9 @@ static int nvme_enable_ctrl(struct NVMeController *ctrl)
     }
 
     ctrl->ctrl_config |= NVME_CC_ENABLE;
-    Kprintf("[nvme] enable_ctrl: writing final CC=%08lx (with CC.EN)\n", ctrl->ctrl_config);
+    KprintfH("[nvme] enable_ctrl: writing final CC=%08lx (with CC.EN)\n", ctrl->ctrl_config);
     nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
-    Kprintf("[nvme] enable_ctrl: now waiting for CSTS.RDY=1, timeout=%lu s\n", (ULONG)((timeout + 1) / 2));
+    KprintfH("[nvme] enable_ctrl: now waiting for CSTS.RDY=1, timeout=%lu s\n", (ULONG)((timeout + 1) / 2));
     return nvme_wait_ready(ctrl, NVME_CSTS_RDY, NVME_CSTS_RDY,
                            (timeout + 1) / 2, "initialisation");
 }
@@ -296,8 +295,8 @@ static int nvme_disable_ctrl(struct NVMeController *ctrl, BOOL shutdown)
 {
     u32 csts_before = nvme_reg_read32(ctrl, NVME_REG_CSTS);
 
-    Kprintf("[nvme] disable_ctrl(shutdown=%ld): CSTS_before=%08lx CC_before=%08lx\n",
-            (LONG)shutdown, csts_before, ctrl->ctrl_config);
+    KprintfH("[nvme] disable_ctrl(shutdown=%ld): CSTS_before=%08lx CC_before=%08lx\n",
+             (LONG)shutdown, csts_before, ctrl->ctrl_config);
 
     ctrl->ctrl_config &= ~(u32)NVME_CC_SHN_MASK;
     if (shutdown)
@@ -625,8 +624,8 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         struct NVMeController *ctrl = (struct NVMeController *)node;
         node = next;
 
-        Kprintf("[nvme] %s: tearing down ctrl %lx\n", __func__,
-                (ULONG)ctrl->pci_dev);
+        KprintfH("[nvme] %s: tearing down ctrl %lx\n", __func__,
+                 (ULONG)ctrl->pci_dev);
 
         /* Stop draining both ports before tearing the device down, then
          * force-complete every still-inflight request on both queues
@@ -715,7 +714,7 @@ void nvme_reset_controller(struct NVMeController *ctrl)
     if (!ctrl || !ctrl->bar0)
         return;
 
-    Kprintf("[nvme] reset: starting\n");
+    KprintfH("[nvme] reset: starting\n");
 
     if (!nvme_change_ctrl_state(ctrl, NVME_CTRL_RESETTING))
     {
@@ -768,7 +767,7 @@ void nvme_reset_controller(struct NVMeController *ctrl)
     nvme_start_ctrl(ctrl);
     nvme_queue_scan(ctrl);
 
-    Kprintf("[nvme] reset: complete, controller LIVE\n");
+    KprintfH("[nvme] reset: complete, controller LIVE\n");
     return;
 
 dead:

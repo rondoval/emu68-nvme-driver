@@ -8,10 +8,9 @@
 #endif
 
 #include <exec/io.h>
-#include <memory.h>
-#include <debug.h>
 
-#include "../include/device.h"
+#include "nvme/nvme_ctrl.h"
+#include "device.h"
 
 /*
  * Post an internal abort request to the controller task on behalf of the
@@ -29,10 +28,10 @@ static inline LONG post_abort_request(struct NVMeUnit *unit, struct IOStdReq *io
         return -1;
 
     abort_req->io_Message.mn_Length = sizeof(*abort_req);
-    abort_req->io_Unit              = io->io_Unit;
-    abort_req->io_Command           = CMD_INTERNAL_ABORT_REQUEST;
-    abort_req->io_Flags             = IOF_QUICK | REQ_INTERNAL;
-    abort_req->io_Data              = io; /* request to abort */
+    abort_req->io_Unit = io->io_Unit;
+    abort_req->io_Command = CMD_INTERNAL_ABORT_REQUEST;
+    abort_req->io_Flags = IOF_QUICK | REQ_INTERNAL;
+    abort_req->io_Data = io; /* request to abort */
 
     PutMsg(ctrl->msgPort, (struct Message *)abort_req);
     return 0;

@@ -7,13 +7,8 @@
 #include <proto/exec.h>
 #endif
 
-#include <exec/execbase.h>
-#include <exec/types.h>
-
-#include <types.h>
-#include <debug.h>
-
-#include <device.h>
+#include "device.h"
+#include "nvme/nvme_ctrl.h"
 
 /*
  * UnitOpen - open or re-open a namespace unit.
@@ -32,7 +27,8 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
              (ULONG)unit, unitNumber, unit->nsid, flags,
              (ULONG)ctrl);
 
-    if (!ctrl) {
+    if (!ctrl)
+    {
         Kprintf("[nvme] %s: controller %lx never brought up\n",
                 __func__, (ULONG)ctrl->pci_dev);
         return ERR_CONTROLLER_ERROR;
@@ -41,7 +37,8 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
     /* Belt-and-suspenders: nvme_ns_remove unlinks dead units from
      * base->units so openLib's walk won't find them, but a holder that
      * obtained the pointer some other way still funnels through here. */
-    if (unit->flags & NVME_UNIT_DEAD) {
+    if (unit->flags & NVME_UNIT_DEAD)
+    {
         Kprintf("[nvme] %s: unit %ld is dead (namespace removed)\n",
                 __func__, unitNumber);
         return ERR_CONTROLLER_ERROR;

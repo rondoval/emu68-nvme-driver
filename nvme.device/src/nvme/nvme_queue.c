@@ -23,13 +23,13 @@
 #include <proto/exec.h>
 #endif
 
-#include <debug.h>
 #include <timing.h>
 
+#include <nvme/nvme_ctrl.h> /* struct NVMeController, NVME_CTRL_* flags, nvme_ctrl_state */
+#include <nvme/nvme_completion.h>
 #include <device.h>
 #include <nvme/nvme_io.h>
 #include <nvme/nvme_admin.h> /* nvme_abort_request, nvme_submit_sync_cmd */
-#include <nvme/nvme_constants.h> /* nvme_opcode_str, nvme_get_error_status_str */
 #include <nvme/nvme_queue.h>
 
 #define NVME_IO_QID 1 /* sole I/O queue ID (we create one pair) */
@@ -281,10 +281,10 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
             if ((now - req->abort_us) / 1000U < NVME_ABORT_TIMEOUT)
                 continue;
 
-            Kprintf("[nvme] abort grace expired: qid=%lu tag=%lu "
-                    "opcode=0x%02lx — requesting controller reset\n",
-                    (ULONG)q->qid, (ULONG)req->tag,
-                    (ULONG)req->cmd.common.opcode);
+            KprintfH("[nvme] abort grace expired: qid=%lu tag=%lu "
+                     "opcode=0x%02lx — requesting controller reset\n",
+                     (ULONG)q->qid, (ULONG)req->tag,
+                     (ULONG)req->cmd.common.opcode);
             Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
             return; /* one reset is enough per tick */
         }
@@ -459,8 +459,8 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     /* Result dword0: NSQA in [15:0], NCQA in [31:16].  Both are
      * 0-based, so 0 means "1 queue granted". */
     u32 num_queues = le32(result.u32);
-    Kprintf("[nvme] %s: granted NSQA=%lu NCQA=%lu (both 0-based; we need 1+1)\n",
-            __func__, num_queues & 0xFFFF, num_queues >> 16);
+    KprintfH("[nvme] %s: granted NSQA=%lu NCQA=%lu (both 0-based; we need 1+1)\n",
+             __func__, num_queues & 0xFFFF, num_queues >> 16);
 
     /* Step 2: allocate rings + inflight table for the I/O queue. */
     if (nvme_setup_queue(ctrl, &ctrl->io_q, NVME_IO_QID, NVME_IO_QUEUE_SIZE) != 0)
@@ -498,9 +498,9 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
         goto fail;
     }
 
-    Kprintf("[nvme] %s: I/O queue pair (QID=%lu) ready, SQ@%lx CQ@%lx\n",
-            __func__, (ULONG)NVME_IO_QID,
-            (ULONG)ctrl->io_q.sq, (ULONG)ctrl->io_q.cq);
+    KprintfH("[nvme] %s: I/O queue pair (QID=%lu) ready, SQ@%lx CQ@%lx\n",
+             __func__, (ULONG)NVME_IO_QID,
+             (ULONG)ctrl->io_q.sq, (ULONG)ctrl->io_q.cq);
     return 0;
 
 fail:
@@ -522,7 +522,7 @@ fail:
  */
 void nvme_cancel_request(struct nvme_request *req)
 {
-    Kprintf("[nvme] cancel: tag %lu\n", (ULONG)req->tag);
+    KprintfH("[nvme] cancel: tag %lu\n", (ULONG)req->tag);
     req->status = NVME_SC_HOST_ABORTED_CMD;
     req->flags |= NVME_REQ_CANCELLED;
     nvme_complete_rq(req);

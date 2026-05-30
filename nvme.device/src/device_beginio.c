@@ -11,19 +11,19 @@
 #include <exec/io.h>
 #include <devices/trackdisk.h>
 #include <devices/newstyle.h>
-#include <devices/nvme.h>
-#include <debug.h>
 
-#include "../include/device.h"
+#include "devices/nvme.h"
+#include "nvme/nvme_ctrl.h"
+#include "device.h"
 
 static const UWORD SupportedCommands[] = {
     CMD_READ,
     CMD_WRITE,
     CMD_UPDATE, /* quick */
     CMD_CLEAR,  /* quick */
-    CMD_STOP, /* standby? */
-    CMD_START, /* resume? */
-    TD_MOTOR, /* quick */
+    CMD_STOP,   /* standby? */
+    CMD_START,  /* resume? */
+    TD_MOTOR,   /* quick */
     TD_FORMAT,
     TD_CHANGENUM,    /* quick */
     TD_CHANGESTATE,  /* quick */
@@ -146,7 +146,8 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
     /* Namespace went away under us — refuse new I/O.  Set TDERR_DiskChanged
      * (standard trackdisk "media gone" reply) so filesystems mark the volume
      * not-ready instead of retrying forever. */
-    if (unit->flags & NVME_UNIT_DEAD) {
+    if (unit->flags & NVME_UNIT_DEAD)
+    {
         io->io_Error = TDERR_DiskChanged;
         if (!(io->io_Flags & IOF_QUICK))
             ReplyMsg((struct Message *)io);
@@ -161,13 +162,13 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
     case ETD_CLEAR:
     case TD_CHANGENUM: /* Fixed media: no media changes */
     case TD_CHANGESTATE:
-    case TD_PROTSTATUS: /* NVMe drives are not write-protected by default */
+    case TD_PROTSTATUS:   /* NVMe drives are not write-protected by default */
     case TD_ADDCHANGEINT: /* Fixed media: no change interrupts. */
     case TD_REMCHANGEINT: /* Nothing to remove for fixed media */
         io->io_Actual = 0;
         break;
 
-    case TD_EJECT: /* Fixed media: no eject */
+    case TD_EJECT:        /* Fixed media: no eject */
     case TD_GETNUMTRACKS: /* No CHS geometry */
         io->io_Error = IOERR_NOCMD;
         break;
@@ -186,17 +187,19 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
 
     case NSCMD_NVME_ADMIN_PASS:
     case NSCMD_NVME_IO_PASS:
-        if (!io->io_Data || io->io_Length != sizeof(struct NVMePassthruCmd)) {
+        if (!io->io_Data || io->io_Length != sizeof(struct NVMePassthruCmd))
+        {
             io->io_Error = IOERR_BADLENGTH;
             break;
         }
-        if (!unit->ctrl->admin_task) {
+        if (!unit->ctrl->admin_task)
+        {
             io->io_Error = IOERR_OPENFAIL;
             break;
         }
         io->io_Flags &= (UBYTE)~IOF_QUICK;
         PutMsg(unit->ctrl->adminPort, (struct Message *)io);
-        return;     /* AdminWorker ReplyMsg's after completion */
+        return; /* AdminWorker ReplyMsg's after completion */
 
     default:
         /* All other commands (reads, writes, format, SCSI, …)

@@ -8,15 +8,15 @@
  * conductor.
  */
 #include <nvme/nvme_core.h>
-#include <device.h>             /* struct NVMeUnit (req->unit) */
+#include <nvme/nvme_ctrl.h> /* struct NVMeController */
+#include <device.h>			/* struct NVMeUnit (req->unit) */
 
 #include <exec/errors.h>
 #include <devices/trackdisk.h>
 
 #include <timing.h> /* get_time */
 
-#include <nvme/nvme_constants.h> /* nvme_get_*_str */
-#include <nvme/nvme_io.h>		 /* nvme_cleanup_cmd, nvme_req_destroy, NVME_IO_ASYNC,
+#include <nvme/nvme_io.h> /* nvme_cleanup_cmd, nvme_req_destroy, NVME_IO_ASYNC,
                                    * nvme_io_context_pump, nvme_io_context_finish */
 #include <nvme/nvme_completion.h>
 
@@ -114,8 +114,8 @@ static void nvme_log_err_normal(struct nvme_request *req)
 static void nvme_log_err_passthru(struct nvme_request *req)
 {
 	Kprintf(req->unit
-			? "%.40s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%scdw10=0x%lx cdw11=0x%lx cdw12=0x%lx cdw13=0x%lx cdw14=0x%lx cdw15=0x%lx\n"
-			: "%s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%scdw10=0x%lx cdw11=0x%lx cdw12=0x%lx cdw13=0x%lx cdw14=0x%lx cdw15=0x%lx\n",
+				? "%.40s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%scdw10=0x%lx cdw11=0x%lx cdw12=0x%lx cdw13=0x%lx cdw14=0x%lx cdw15=0x%lx\n"
+				: "%s: %s(0x%lx), %s (sct 0x%lx / sc 0x%lx) %s%scdw10=0x%lx cdw11=0x%lx cdw12=0x%lx cdw13=0x%lx cdw14=0x%lx cdw15=0x%lx\n",
 			req->unit ? (const void *)req->ac->id_strings.model : "(admin)",
 			req->unit ? nvme_get_opcode_str(req->cmd.common.opcode) : nvme_get_admin_opcode_str(req->cmd.common.opcode),
 			req->cmd.common.opcode,
@@ -298,7 +298,7 @@ void nvme_complete_rq(struct nvme_request *req)
 			 (ULONG)req, (ULONG)req->tag,
 			 (ULONG)req->cmd.common.opcode,
 			 req->unit ? nvme_get_opcode_str(req->cmd.common.opcode)
-				   : nvme_get_admin_opcode_str(req->cmd.common.opcode),
+					   : nvme_get_admin_opcode_str(req->cmd.common.opcode),
 			 (ULONG)req->status, nvme_get_error_status_str(req->status),
 			 (ULONG)req->unit, (ULONG)req->ctx);
 

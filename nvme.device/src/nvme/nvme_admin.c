@@ -17,14 +17,12 @@
 #include <proto/exec.h>
 #endif
 
-#include <debug.h>
-#include <memory.h>
-#include <timing.h>
+#include <errors.h>
 
 #include <device.h>
-#include <nvme/nvme_core.h>
+#include <nvme/nvme_ctrl.h> /* struct NVMeController */
+#include <nvme/nvme_completion.h>
 #include <nvme/nvme_admin.h>
-#include <nvme/nvme_constants.h> /* nvme_get_admin_opcode_str, nvme_get_error_status_str */
 #include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_submit_io, nvme_req_destroy */
 #include <nvme/nvme_queue.h> /* nvme_alloc_tag, nvme_inflight_claim */
 
@@ -79,10 +77,10 @@ static struct nvme_request *nvme_req_alloc_admin(struct NVMeController *ctrl,
 static void nvme_init_request(struct nvme_request *req, struct nvme_command *cmd)
 {
     cmd->common.flags = (u8)(cmd->common.flags & (u8)~NVME_CMD_SGL_ALL);
-    req->status  = 0;
+    req->status = 0;
     req->retries = 0;
-    req->flags   = 0;
-    req->cmd     = *cmd;   /* embedded copy */
+    req->flags = 0;
+    req->cmd = *cmd; /* embedded copy */
 }
 
 /*
@@ -168,10 +166,7 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
              (ULONG)buffer, (ULONG)buflen, (ULONG)result);
 
     if (!ctrl)
-    {
-        Kprintf("[nvme] submit_sync_cmd: NULL ctrl\n");
         return -ENODEV;
-    }
 
     int err;
     struct nvme_request *req = nvme_req_alloc_admin(ctrl, &err);
@@ -245,7 +240,7 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
 int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
                           void *buffer, u32 buflen,
                           void (*done)(struct nvme_request *req), void *priv,
-                          enum nvme_req_flags req_flags)
+                          unsigned int req_flags)
 {
     KprintfH("[nvme] submit_async_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu done=%lx priv=%lx flags=0x%lx\n",
              (ULONG)ctrl, (ULONG)cmd->common.opcode,
@@ -254,10 +249,7 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
              (ULONG)req_flags);
 
     if (!ctrl)
-    {
-        Kprintf("[nvme] submit_async_cmd: NULL ctrl\n");
         return -ENODEV;
-    }
     if (!done)
     {
         Kprintf("[nvme] submit_async_cmd: NULL done callback (req would leak)\n");
@@ -276,7 +268,7 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
      * the caller's USERCMD / AER markers survive. */
     nvme_init_request(req, cmd);
     req->cmd.common.command_id = req->tag;
-    req->flags |= req_flags;
+    req->flags |= (enum nvme_req_flags)req_flags;
 
     nvme_stage_admin_prps(req, buffer, buflen);
 
@@ -529,23 +521,23 @@ int nvme_configure_host_options(struct NVMeController *ctrl)
  *          and the caller still owns @log.
  */
 int nvme_get_log(struct NVMeController *ctrl, u32 nsid, u8 log_page, u8 lsp, u8 csi,
-		void *log, size_t size, u64 offset,
-		void (*done)(struct nvme_request *), void *priv)
+                 void *log, size_t size, u64 offset,
+                 void (*done)(struct nvme_request *), void *priv)
 {
-	struct nvme_command c = { };
-	u32 dwlen = nvme_bytes_to_numd(size);
+    struct nvme_command c = {};
+    u32 dwlen = nvme_bytes_to_numd(size);
 
-	c.get_log_page.opcode = nvme_admin_get_log_page;
-	c.get_log_page.nsid = le32(nsid);
-	c.get_log_page.lid = log_page;
-	c.get_log_page.lsp = lsp;
-	c.get_log_page.numdl = le16(dwlen & ((1 << 16) - 1));
-	c.get_log_page.numdu = le16(dwlen >> 16);
-	c.get_log_page.lpol = le32(u64_lo32(offset));
-	c.get_log_page.lpou = le32(u64_hi32(offset));
-	c.get_log_page.csi = csi;
+    c.get_log_page.opcode = nvme_admin_get_log_page;
+    c.get_log_page.nsid = le32(nsid);
+    c.get_log_page.lid = log_page;
+    c.get_log_page.lsp = lsp;
+    c.get_log_page.numdl = le16(dwlen & ((1 << 16) - 1));
+    c.get_log_page.numdu = le16(dwlen >> 16);
+    c.get_log_page.lpol = le32(u64_lo32(offset));
+    c.get_log_page.lpou = le32(u64_hi32(offset));
+    c.get_log_page.csi = csi;
 
-	if (done)
-		return nvme_submit_async_cmd(ctrl, &c, log, size, done, priv, 0);
-	return nvme_submit_sync_cmd(ctrl, &c, NULL, log, size);
+    if (done)
+        return nvme_submit_async_cmd(ctrl, &c, log, size, done, priv, 0);
+    return nvme_submit_sync_cmd(ctrl, &c, NULL, log, size);
 }

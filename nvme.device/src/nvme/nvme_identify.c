@@ -5,15 +5,13 @@
  * Issues the various Identify admin commands and parses the responses
  * into the driver's nvme_ns_info / nvme_id_ctrl structures.
  */
-#include <nvme/nvme_core.h>        /* must come first: kcompat.h establishes proto/exec.h
+#include <nvme/nvme_core.h> /* must come first: kcompat.h establishes proto/exec.h
                           * decls before emu68-common's memory.h pool inlines */
 
-#include <types.h>
 #include <errors.h>
 
 #include <device.h>
-#include <nvme/nvme_admin.h>      /* nvme_submit_sync_cmd */
-#include <nvme/nvme_constants.h>  /* nvme_get_error_status_str */
+#include <nvme/nvme_admin.h> /* nvme_submit_sync_cmd */
 #include <nvme/nvme_identify.h>
 
 /*
@@ -32,14 +30,15 @@
  * Returns: 0 on success, negative errno or positive NVMe status on failure
  */
 static int nvme_submit_identify(struct NVMeController *ctrl,
-		struct nvme_command *c, u32 len, void **out)
+								struct nvme_command *c, u32 len, void **out)
 {
 	void *buf = pool_zalloc(ctrl->memoryPool, len);
 	if (!buf)
 		return -ENOMEM;
 
 	int ret = nvme_submit_sync_cmd(ctrl, c, NULL, buf, len);
-	if (ret) {
+	if (ret)
+	{
 		pool_free(ctrl->memoryPool, buf);
 		return ret;
 	}
@@ -62,14 +61,14 @@ static int nvme_submit_identify(struct NVMeController *ctrl,
  */
 int nvme_identify_ctrl(struct NVMeController *dev, struct nvme_id_ctrl **id)
 {
-	struct nvme_command c = { };
+	struct nvme_command c = {};
 
 	/* gcc-4.4.4 (at least) has issues with initializers and anon unions */
 	c.identify.opcode = nvme_admin_identify;
 	c.identify.cns = NVME_ID_CNS_CTRL;
 
 	return nvme_submit_identify(dev, &c, sizeof(struct nvme_id_ctrl),
-			(void **)id);
+								(void **)id);
 }
 
 /*
@@ -86,9 +85,9 @@ int nvme_identify_ctrl(struct NVMeController *dev, struct nvme_id_ctrl **id)
 int nvme_identify_ctrl_nvm(struct NVMeController *ctrl, struct nvme_id_ctrl_nvm **id)
 {
 	struct nvme_command c = {
-		.identify.opcode	= nvme_admin_identify,
-		.identify.cns		= NVME_ID_CNS_CS_CTRL,
-		.identify.csi		= NVME_CSI_NVM,
+		.identify.opcode = nvme_admin_identify,
+		.identify.cns = NVME_ID_CNS_CS_CTRL,
+		.identify.csi = NVME_CSI_NVM,
 	};
 
 	return nvme_submit_identify(ctrl, &c, sizeof(**id), (void **)id);
@@ -109,16 +108,18 @@ int nvme_identify_ctrl_nvm(struct NVMeController *ctrl, struct nvme_id_ctrl_nvm 
  * Returns: payload length in bytes on success, -1 if the descriptor is invalid
  */
 static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids *ids,
-		struct nvme_ns_id_desc *cur, BOOL *csi_seen)
+								struct nvme_ns_id_desc *cur, BOOL *csi_seen)
 {
 	const char *warn_str = "ctrl returned bogus length:";
 	void *data = cur;
 
-	switch (cur->nidt) {
+	switch (cur->nidt)
+	{
 	case NVME_NIDT_EUI64:
-		if (cur->nidl != NVME_NIDT_EUI64_LEN) {
+		if (cur->nidl != NVME_NIDT_EUI64_LEN)
+		{
 			Kprintf("[nvme] %s: %s %ld for NVME_NIDT_EUI64\n",
-				 __func__, warn_str, cur->nidl);
+					__func__, warn_str, cur->nidl);
 			return -1;
 		}
 		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
@@ -126,9 +127,10 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
 		CopyMem(data + sizeof(*cur), ids->eui64, NVME_NIDT_EUI64_LEN);
 		return NVME_NIDT_EUI64_LEN;
 	case NVME_NIDT_NGUID:
-		if (cur->nidl != NVME_NIDT_NGUID_LEN) {
+		if (cur->nidl != NVME_NIDT_NGUID_LEN)
+		{
 			Kprintf("[nvme] %s: %s %ld for NVME_NIDT_NGUID\n",
-				 __func__, warn_str, cur->nidl);
+					__func__, warn_str, cur->nidl);
 			return -1;
 		}
 		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
@@ -136,9 +138,10 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
 		CopyMem(data + sizeof(*cur), ids->nguid, NVME_NIDT_NGUID_LEN);
 		return NVME_NIDT_NGUID_LEN;
 	case NVME_NIDT_UUID:
-		if (cur->nidl != NVME_NIDT_UUID_LEN) {
+		if (cur->nidl != NVME_NIDT_UUID_LEN)
+		{
 			Kprintf("[nvme] %s: %s %ld for NVME_NIDT_UUID\n",
-				 __func__, warn_str, cur->nidl);
+					__func__, warn_str, cur->nidl);
 			return -1;
 		}
 		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
@@ -146,9 +149,10 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
 		CopyMem(data + sizeof(*cur), &ids->uuid, NVME_NIDT_UUID_LEN);
 		return NVME_NIDT_UUID_LEN;
 	case NVME_NIDT_CSI:
-		if (cur->nidl != NVME_NIDT_CSI_LEN) {
+		if (cur->nidl != NVME_NIDT_CSI_LEN)
+		{
 			Kprintf("[nvme] %s: %s %ld for NVME_NIDT_CSI\n",
-				 __func__, warn_str, cur->nidl);
+					__func__, warn_str, cur->nidl);
 			return -1;
 		}
 		CopyMem(data + sizeof(*cur), &ids->csi, NVME_NIDT_CSI_LEN);
@@ -173,9 +177,9 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
  * Returns: 0 on success, negative errno or positive NVMe status on failure
  */
 static int nvme_identify_ns_descs(struct NVMeController *ctrl,
-		struct nvme_ns_info *info)
+								  struct nvme_ns_info *info)
 {
-	struct nvme_command c = { };
+	struct nvme_command c = {};
 	BOOL csi_seen = FALSE;
 
 	if (ctrl->vs < NVME_VS(1, 3, 0) && !nvme_multi_css(ctrl))
@@ -189,13 +193,15 @@ static int nvme_identify_ns_descs(struct NVMeController *ctrl,
 
 	void *data;
 	int status = nvme_submit_identify(ctrl, &c, NVME_IDENTIFY_DATA_SIZE, &data);
-	if (status) {
+	if (status)
+	{
 		Kprintf("[nvme] %s: Identify Descriptors failed (nsid=%lu, status=0x%lx (%s))\n",
-			__func__, info->nsid, status, nvme_get_error_status_str((u16)status));
+				__func__, info->nsid, status, nvme_get_error_status_str((u16)status));
 		return status;
 	}
 
-	for (int pos = 0, len = 0; pos < NVME_IDENTIFY_DATA_SIZE; pos += len) {
+	for (int pos = 0, len = 0; pos < NVME_IDENTIFY_DATA_SIZE; pos += len)
+	{
 		struct nvme_ns_id_desc *cur = data + pos;
 
 		if (cur->nidl == 0)
@@ -208,9 +214,10 @@ static int nvme_identify_ns_descs(struct NVMeController *ctrl,
 		len += (int)sizeof(*cur);
 	}
 
-	if (nvme_multi_css(ctrl) && !csi_seen) {
+	if (nvme_multi_css(ctrl) && !csi_seen)
+	{
 		Kprintf("[nvme] %s: Command set not reported for nsid:%ld\n",
-			 __func__, info->nsid);
+				__func__, info->nsid);
 		status = -EINVAL;
 	}
 
@@ -232,9 +239,9 @@ static int nvme_identify_ns_descs(struct NVMeController *ctrl,
  * Returns: 0 on success, negative errno or positive NVMe status on failure
  */
 static int nvme_identify_ns(struct NVMeController *ctrl, unsigned nsid,
-			struct nvme_id_ns **id)
+							struct nvme_id_ns **id)
 {
-	struct nvme_command c = { };
+	struct nvme_command c = {};
 
 	/* gcc-4.4.4 (at least) has issues with initializers and anon unions */
 	c.identify.opcode = nvme_admin_identify;
@@ -244,7 +251,7 @@ static int nvme_identify_ns(struct NVMeController *ctrl, unsigned nsid,
 	int error = nvme_submit_identify(ctrl, &c, sizeof(**id), (void **)id);
 	if (error)
 		Kprintf("[nvme] %s: Identify namespace failed (nsid=%lu, status=0x%lx (%s))\n",
-			__func__, nsid, error, nvme_get_error_status_str((u16)error));
+				__func__, nsid, error, nvme_get_error_status_str((u16)error));
 	return error;
 }
 
@@ -263,13 +270,13 @@ static int nvme_identify_ns(struct NVMeController *ctrl, unsigned nsid,
  * Returns: 0 on success, negative errno or positive NVMe status on failure
  */
 static int nvme_identify_ns_nvm(struct NVMeController *ctrl, unsigned nsid,
-		unsigned lbaf, struct nvme_ns_info *info)
+								unsigned lbaf, struct nvme_ns_info *info)
 {
 	struct nvme_command c = {
-		.identify.opcode	= nvme_admin_identify,
-		.identify.nsid		= le32(nsid),
-		.identify.cns		= NVME_ID_CNS_CS_NS,
-		.identify.csi		= NVME_CSI_NVM,
+		.identify.opcode = nvme_admin_identify,
+		.identify.nsid = le32(nsid),
+		.identify.cns = NVME_ID_CNS_CS_NS,
+		.identify.csi = NVME_CSI_NVM,
 	};
 	struct nvme_id_ns_nvm *nvm;
 
@@ -300,7 +307,7 @@ static int nvme_identify_ns_nvm(struct NVMeController *ctrl, unsigned nsid,
  * Returns: 0 on success, -ENODEV if namespace is not present, or other error
  */
 static int nvme_ns_info_from_identify(struct NVMeController *ctrl,
-		struct nvme_ns_info *info)
+									  struct nvme_ns_info *info)
 {
 	struct nvme_id_ns *id;
 
@@ -308,7 +315,8 @@ static int nvme_ns_info_from_identify(struct NVMeController *ctrl,
 	if (ret)
 		return ret;
 
-	if (id->ncap == 0) {
+	if (id->ncap == 0)
+	{
 		/* namespace not allocated or attached */
 		info->is_removed = TRUE;
 		ret = -ENODEV;
@@ -329,24 +337,28 @@ static int nvme_ns_info_from_identify(struct NVMeController *ctrl,
 	info->pi_type = id->dps & NVME_NS_DPS_PI_MASK;
 	info->deac = (id->dlfeat & 0x7) == 0x1 && (id->dlfeat & (1 << 3));
 
-	if (ctrl->quirks & NVME_QUIRK_BOGUS_NID) {
+	if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
+	{
 		Kprintf("[nvme] %s: controller has bogus NID quirk, skipping identifiers\n",
-			__func__);
-	} else {
+				__func__);
+	}
+	else
+	{
 		struct nvme_ns_ids *ids = &info->ids;
 
 		if (ctrl->vs >= NVME_VS(1, 1, 0) &&
-		    !memchr_inv(ids->eui64, 0, sizeof(ids->eui64)))
+			!memchr_inv(ids->eui64, 0, sizeof(ids->eui64)))
 			CopyMem(id->eui64, ids->eui64, sizeof(ids->eui64));
 		if (ctrl->vs >= NVME_VS(1, 2, 0) &&
-		    !memchr_inv(ids->nguid, 0, sizeof(ids->nguid)))
+			!memchr_inv(ids->nguid, 0, sizeof(ids->nguid)))
 			CopyMem(id->nguid, ids->nguid, sizeof(ids->nguid));
 	}
 
-	if (ctrl->ctratt & NVME_CTRL_ATTR_ELBAS) {
+	if (ctrl->ctratt & NVME_CTRL_ATTR_ELBAS)
+	{
 		ret = nvme_identify_ns_nvm(ctrl, info->nsid, lbaf, info);
 		if (ret > 0)
-			ret = 0;	/* unsupported: leave elbaf cache zeroed */
+			ret = 0; /* unsupported: leave elbaf cache zeroed */
 	}
 
 error:
@@ -368,12 +380,12 @@ error:
  * Returns: 0 on success, negative errno or positive NVMe status on failure
  */
 static int nvme_ns_info_from_id_cs_indep(struct NVMeController *ctrl,
-		struct nvme_ns_info *info)
+										 struct nvme_ns_info *info)
 {
 	struct nvme_command c = {
-		.identify.opcode	= nvme_admin_identify,
-		.identify.nsid		= le32(info->nsid),
-		.identify.cns		= NVME_ID_CNS_NS_CS_INDEP,
+		.identify.opcode = nvme_admin_identify,
+		.identify.nsid = le32(info->nsid),
+		.identify.cns = NVME_ID_CNS_NS_CS_INDEP,
 	};
 	struct nvme_id_ns_cs_indep *id;
 
@@ -412,9 +424,10 @@ int nvme_identify_ns_info(struct NVMeController *ctrl, struct nvme_ns_info *info
 	if (ret)
 		return ret;
 
-	if (info->ids.csi != NVME_CSI_NVM && !nvme_multi_css(ctrl)) {
+	if (info->ids.csi != NVME_CSI_NVM && !nvme_multi_css(ctrl))
+	{
 		Kprintf("[nvme] %s: command set not reported for nsid: %ld\n",
-			__func__, info->nsid);
+				__func__, info->nsid);
 		return -EINVAL;
 	}
 
@@ -433,8 +446,9 @@ int nvme_identify_ns_info(struct NVMeController *ctrl, struct nvme_ns_info *info
 	 * negative errno is fatal.
 	 */
 	if ((ctrl->cap & NVME_CAP_CRMS_CRIMS) ||
-	    (info->ids.csi != NVME_CSI_NVM) ||
-	    ctrl->vs >= NVME_VS(2, 0, 0)) {
+		(info->ids.csi != NVME_CSI_NVM) ||
+		ctrl->vs >= NVME_VS(2, 0, 0))
+	{
 		ret = nvme_ns_info_from_id_cs_indep(ctrl, info);
 		if (ret < 0)
 			return ret;
