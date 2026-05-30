@@ -35,6 +35,7 @@
 #include <nvme/nvme_hmb.h>
 #include <nvme/nvme_probe.h>
 #include <nvme/nvme_queue.h> /* nvme_setup_admin_queue, nvme_setup_io_queue, nvme_unquiesce_io_queues */
+#include <nvme/nvme_quirks.h> /* nvme_lookup_quirks */
 #include <nvme/nvme_scan.h>  /* nvme_scan_namespaces */
 
 /* NVMe PCI class code: Mass Storage / NVM Express (base 0x01, sub 0x08, prog-if 0x02) */
@@ -407,7 +408,8 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
     }
 
     // Initialise the state machine to NEW, namespaces MinList, scan_lock semaphore.
-    nvme_init_ctrl(ctrl, 0);
+    // Seed ctrl->quirks from the PCI ID table (matched on vendor:device).
+    nvme_init_ctrl(ctrl, nvme_lookup_quirks(ctrl->pci_dev));
 
     KprintfH("[nvme] %s: calling nvme_disable_ctrl (CC.EN=0, wait RDY=0)\n", __func__);
     if (nvme_disable_ctrl(ctrl, FALSE) != 0)
