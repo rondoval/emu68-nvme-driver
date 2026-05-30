@@ -94,7 +94,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     ctrl->unit_task = FindTask(NULL);
     Signal(parent, SIGBREAKF_CTRL_F); /* signal success */
 
-    Kprintf("[nvme] %s: controller task running (bar0=%lx)\n", __func__, (ULONG)ctrl->bar0);
+    KprintfH("[nvme] %s: controller task running (bar0=%lx)\n", __func__, (ULONG)ctrl->bar0);
 
     ULONG waitMask = (1UL << ctrl->msgPort->mp_SigBit) |
                      (1UL << timerPort->mp_SigBit) |
