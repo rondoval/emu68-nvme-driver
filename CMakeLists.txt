@@ -1,0 +1,15 @@
+cmake_minimum_required(VERSION 3.14.0)
+project(emu68-nvme-driver VERSION 1.0)
+
+string(TIMESTAMP CURRENT_DATE "(%d.%m.%Y)")
+set(VERSTRING "$VER: ${PROJECT_NAME} ${PROJECT_VERSION} ${CURRENT_DATE}")
+
+find_package(Emu68Common REQUIRED)
+find_package(Emu68PCIe REQUIRED)
+
+if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_SOURCE_DIR}/install" CACHE PATH "Install path" FORCE)
+endif()
+
+add_subdirectory(tools)
+add_subdirectory(nvme.device)

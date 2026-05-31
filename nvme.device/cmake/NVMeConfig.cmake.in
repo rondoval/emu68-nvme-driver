@@ -1,0 +1,7 @@
+@PACKAGE_INIT@
+
+include(CMakeFindDependencyMacro)
+# nvme/nvme_defs.h pulls emu68-common's <types.h>/<bits.h>.
+find_dependency(Emu68Common)
+
+include("${CMAKE_CURRENT_LIST_DIR}/NVMeTargets.cmake")
