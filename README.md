@@ -7,6 +7,9 @@ The driver is ported from the Linux 7.0 NVMe host driver and then heavily adapte
 Linux blk-mq, sysfs, and kernel service layers are replaced with Amiga tasks, message ports,
 Exec memory management, and an Amiga-facing block-device API.
 
+> Warning: this is still a new driver. Data loss, corruption, and other storage failures are still
+> possible. Use it at your own risk and keep current backups of anything you care about.
+
 ---
 
 ## Scope
@@ -74,6 +77,9 @@ Runtime companion files that must already be present:
 `nvme.device` is a local storage driver. It does not require a separate filesystem-specific
 configuration file, but it does depend on the PCIe and interrupt libraries above being installed
 first.
+
+For RDB-based automount and autoboot handling, the driver uses the
+[`mounter`](https://github.com/A4091/mounter) code from the A4091 project.
 
 ---
 
