@@ -83,6 +83,19 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
         return 0;
     }
 
+    /* A non-chained list needs nr_data_pages × 8 bytes.  When that fits the
+     * 256 B small pool (≤ NVME_SMALL_POOL_ENTRIES = 32 pages, i.e. ≤ ~128 KiB
+     * transfer) draw from prp_small_slab instead of burning a full 4 KiB page;
+     * larger / chained lists use prp_large_slab.  The choice is uniform for the
+     * whole request: ≤32 pages is always a single un-chained page, so the
+     * NVME_REQ_PRP_SMALL flag selects the slab for every prp_pages[] entry.
+     * The chain logic below keys off NVME_PRP_ENTRIES_PER_PAGE (512) regardless,
+     * so a ≤32-entry small list never reaches the chain threshold. */
+    const BOOL small = (nr_data_pages <= NVME_SMALL_POOL_ENTRIES);
+    struct slab_cache *const prp_slab = small ? &req->ac->prp_small_slab
+                                              : &req->ac->prp_large_slab;
+    const u32 list_bytes = small ? NVME_SMALL_POOL_SIZE : NVME_CTRL_PAGE_SIZE;
+
     u64 *list = NULL;
     u32 list_pos = 0;
 
@@ -105,13 +118,13 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
                         __func__, (ULONG)(sizeof(req->prp_pages) / sizeof(req->prp_pages[0])));
                 goto free_lists;
             }
-            list = slab_alloc(&req->ac->prp_page_slab);
+            list = slab_alloc(prp_slab);
             if (!list)
             {
                 Kprintf("[nvme] %s: slab_alloc PRP-list failed\n", __func__);
                 goto free_lists;
             }
-            mem_zero(list, NVME_CTRL_PAGE_SIZE);
+            mem_zero(list, list_bytes);
             req->prp_pages[req->prp_page_count++] = list;
             list_pos = 0;
 
@@ -121,8 +134,9 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
             }
             else
             {
-                /* Patch the chain entry of the previous (now full)
-                 * list page, then flush it in one 4 KiB op */
+                /* Patch the chain entry of the previous (now full) list
+                 * page, then flush it.  Chaining only happens for >512-entry
+                 * lists, which are always large (4 KiB) pages. */
                 u64 *prev = (u64 *)req->prp_pages[req->prp_page_count - 2];
                 prev[NVME_PRP_ENTRIES_PER_PAGE - 1] = le64((u64)(ULONG)list);
                 nvme_cache_flush(prev, NVME_CTRL_PAGE_SIZE);
@@ -137,18 +151,20 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
             break;
     }
     /* Final (possibly only) list page: nothing chains off it, so
-     * flush here. */
+     * flush here.  Flush exactly list_bytes — a small page is only 256 B. */
     if (list)
-        nvme_cache_flush(list, NVME_CTRL_PAGE_SIZE);
+        nvme_cache_flush(list, list_bytes);
 
     req->flags |= NVME_REQ_PRP_LIST | NVME_REQ_PRP_SLAB;
+    if (small)
+        req->flags |= NVME_REQ_PRP_SMALL;
     return 0;
 
 free_lists:
     while (req->prp_page_count > 0)
     {
         req->prp_page_count--;
-        slab_free(&req->ac->prp_page_slab, req->prp_pages[req->prp_page_count]);
+        slab_free(prp_slab, req->prp_pages[req->prp_page_count]);
         req->prp_pages[req->prp_page_count] = NULL;
     }
     return -1;
@@ -176,7 +192,7 @@ static int nvme_setup_dsm(struct nvme_request *req, struct nvme_dsm_range *range
              (ULONG)(req->unit ? req->unit->nsid : 0),
              (ULONG)nr);
 
-    if (!req || !ranges || nr == 0 || nr > NVME_DSM_MAX_RANGES)
+    if (!ranges || nr == 0 || nr > NVME_DSM_MAX_RANGES)
     {
         Kprintf("[nvme] %s: bad params (nr=%lu)\n", __func__, (ULONG)nr);
         return -1;
@@ -187,7 +203,7 @@ static int nvme_setup_dsm(struct nvme_request *req, struct nvme_dsm_range *range
 
     mem_zero(&req->cmd, sizeof(req->cmd));
     req->cmd.dsm.opcode = nvme_cmd_dsm;
-    req->cmd.dsm.command_id = req->tag;
+    req->cmd.dsm.command_id = req->cid;
     req->cmd.dsm.nsid = le32(req->unit ? req->unit->nsid : 0);
     req->cmd.dsm.nr = le32((u32)(nr - 1));
     req->cmd.dsm.attributes = le32(NVME_DSMGMT_AD);
@@ -218,8 +234,57 @@ static void nvme_setup_flush(struct nvme_request *req)
 
     mem_zero(&req->cmd, sizeof(req->cmd));
     req->cmd.common.opcode = nvme_cmd_flush;
-    req->cmd.common.command_id = req->tag;
+    req->cmd.common.command_id = req->cid;
     req->cmd.common.nsid = le32(req->unit ? req->unit->nsid : 0);
+}
+
+/*
+ * nvme_setup_write_zeroes - build an NVMe Write Zeroes SQE.  No data transfer
+ * (no PRPs): the controller writes zeroes to [@slba, @slba+@blocks).  Sets the
+ * DEAC bit when the namespace supports it so the zeroed blocks are also freed.
+ * @blocks must be ≤ 65536 (the 16-bit NLB field) — the caller chunks larger
+ * ranges.
+ */
+static void nvme_setup_write_zeroes(struct nvme_request *req, u64 slba, ULONG blocks)
+{
+    mem_zero(&req->cmd, sizeof(req->cmd));
+    req->cmd.write_zeroes.opcode = nvme_cmd_write_zeroes;
+    req->cmd.write_zeroes.command_id = req->cid;
+    req->cmd.write_zeroes.nsid = le32(req->unit ? req->unit->nsid : 0);
+    req->cmd.write_zeroes.slba = le64(slba);
+    req->cmd.write_zeroes.length = le16((u16)(blocks - 1));
+    if (req->unit && (req->unit->features & NVME_NS_DEAC) != 0)
+        req->cmd.write_zeroes.control = le16(NVME_WZ_DEAC);
+}
+
+/*
+ * nvme_rw_chunk_cap - max bytes for one read/write command starting at @lba.
+ *
+ * Normally the MDTS ceiling (max_transfer_bytes; 0 = unlimited).  For
+ * controllers with NVME_QUIRK_STRIPE_SIZE the command must additionally not
+ * cross a stripe boundary (stripe = max_hw_sectors, when a power of two), so the
+ * cap shrinks to the distance from @lba to the next stripe boundary — the
+ * scheduler then aligns subsequent chunks to the stripe.
+ */
+static inline u32 nvme_rw_chunk_cap(struct NVMeController *ctrl, u8 shift, u64 lba)
+{
+    u32 cap = ctrl->max_transfer_bytes;
+
+    if ((unlikely(ctrl->quirks & NVME_QUIRK_STRIPE_SIZE)) &&
+        ctrl->max_hw_sectors &&
+        (ctrl->max_hw_sectors & (ctrl->max_hw_sectors - 1)) == 0u && /* power of two */
+        shift >= SECTOR_SHIFT)
+    {
+        u32 stripe_blocks = ctrl->max_hw_sectors >> (shift - SECTOR_SHIFT);
+        if (stripe_blocks)
+        {
+            u32 to_boundary = stripe_blocks - (u32)(lba & (stripe_blocks - 1u));
+            u32 to_bytes = to_boundary << shift;
+            if (cap == 0u || to_bytes < cap)
+                cap = to_bytes;
+        }
+    }
+    return cap;
 }
 
 /*
@@ -227,10 +292,6 @@ static void nvme_setup_flush(struct nvme_request *req)
  * a bounce buffer when the user pointer isn't directly DMA-able, and
  * building PRP1/2 (plus a chained PRP list if needed) into req->cmd.
  *
- * Also handles the TD_FORMAT / "wipe" idiom where the user passes
- * io_Data == NULL meaning "fill this LBA range with zeros" — a literal
- * read-from-NULL would DMA Chip-RAM contents to the device.  When
- * detected, allocates a zero-filled bounce instead.
  *
  * Returns 0 on success, IOERR_SELFTEST if a bounce-buffer or PRP-list
  * allocation failed.  On non-zero return the caller still owns @req
@@ -242,46 +303,21 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
 {
     const u32 bytes = count << (req->unit ? req->unit->blockShift : 9);
 
-    /* AmigaOS TD_FORMAT (and some implementations of NSCMD_TD_FORMAT64,
-     * CMD_WRITE issued with a "wipe" intent) signals "fill this LBA
-     * range with zeros" by passing io_Data == NULL.  Detect by
-     * checking the ORIGINAL user buffer — held on the parent context
-     * for chunked siblings, or on req->io for single-shot I/Os. */
-    APTR data_base = req->ctx ? req->ctx->user_data : (req->io ? req->io->io_Data : (APTR)1);
-    BOOL is_zero_fill = (opcode == nvme_cmd_write) && data_base == NULL;
-
-    KprintfH("[nvme] setup_rw: opcode=0x%02lx (%s) nsid=%lu lba=0x%08lx%08lx count=%lu bytes=%lu buf=%lx%s\n",
+    KprintfH("[nvme] setup_rw: opcode=0x%02lx (%s) nsid=%lu lba=0x%08lx%08lx count=%lu bytes=%lu buf=%lx\n",
              (ULONG)opcode, nvme_get_opcode_str(opcode),
              (ULONG)(req->unit ? req->unit->nsid : 0),
-             (ULONG)(lba >> 32), (ULONG)lba, count, bytes, (ULONG)buffer,
-             is_zero_fill ? " (zero-fill)" : "");
+             (ULONG)(lba >> 32), (ULONG)lba, count, bytes, (ULONG)buffer);
 
     /* Remember the caller-supplied buffer + length so cleanup_cmd
      * can copy the bounce back (for reads) and apply the post-DMA
-     * cache invalidate to whichever buffer the DMA actually used.
-     * In zero-fill mode there is no caller buffer to copy back to —
-     * leave user_buf NULL so cleanup_cmd skips copy / inval. */
-    req->user_buf = is_zero_fill ? NULL : buffer;
+     * cache invalidate to whichever buffer the DMA actually used. */
+    req->user_buf = buffer;
     req->user_len = bytes;
     req->bounce_buf = NULL;
 
     void *dma_buf = buffer;
 
-    if (is_zero_fill)
-    {
-        APTR b = dma_zalloc(req->ac->memoryPool, DMA_ALIGN_MIN, bytes);
-        if (!b)
-        {
-            Kprintf("[nvme] %s: zero-fill bounce alloc (%lu bytes) failed\n",
-                    __func__, (ULONG)bytes);
-            return IOERR_SELFTEST;
-        }
-        req->bounce_buf = b;
-        KprintfH("[nvme] %s: zero-fill bounce=%lx (%lu bytes)\n",
-                 __func__, (ULONG)b, (ULONG)bytes);
-        dma_buf = b;
-    }
-    else if (buffer && bytes && nvme_needs_bounce(buffer))
+    if (buffer && bytes && nvme_needs_bounce(buffer))
     {
         /* Allocate a Fast-RAM bounce.  Write commands need user data
          * copied in before submit; read commands fill the bounce and
@@ -301,7 +337,7 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
 
     mem_zero(&req->cmd, sizeof(req->cmd));
     req->cmd.rw.opcode = opcode;
-    req->cmd.rw.command_id = req->tag;
+    req->cmd.rw.command_id = req->cid;
     req->cmd.rw.nsid = le32(req->unit ? req->unit->nsid : 0);
     req->cmd.rw.slba = le64(lba);
     req->cmd.rw.length = le16((u16)(count - 1));
@@ -346,8 +382,13 @@ static void nvme_req_free_dma_buffers(struct nvme_request *req)
     if (req->flags & NVME_REQ_PRP_LIST)
     {
         /* Slab-backed PRP-list pages (build_prps) vs caller-provided
-         * dma_zalloc buffer (nvme_setup_dsm) — flag bit disambiguates. */
+         * dma_zalloc buffer (nvme_setup_dsm) — flag bit disambiguates.
+         * NVME_REQ_PRP_SMALL further selects the 256 B vs 4 KiB slab; a
+         * request's list is uniformly one or the other (see build_prps). */
         BOOL use_slab = (req->flags & NVME_REQ_PRP_SLAB) != 0;
+        struct slab_cache *slab = (req->flags & NVME_REQ_PRP_SMALL)
+                                      ? &req->ac->prp_small_slab
+                                      : &req->ac->prp_large_slab;
         while (req->prp_page_count > 0)
         {
             req->prp_page_count--;
@@ -355,13 +396,14 @@ static void nvme_req_free_dma_buffers(struct nvme_request *req)
             if (p)
             {
                 if (use_slab)
-                    slab_free(&req->ac->prp_page_slab, p);
+                    slab_free(slab, p);
                 else if (pool)
                     dma_free(pool, p);
             }
             req->prp_pages[req->prp_page_count] = NULL;
         }
-        req->flags &= (enum nvme_req_flags) ~(NVME_REQ_PRP_LIST | NVME_REQ_PRP_SLAB);
+        req->flags &= (enum nvme_req_flags) ~(NVME_REQ_PRP_LIST | NVME_REQ_PRP_SLAB |
+                                              NVME_REQ_PRP_SMALL);
     }
 
     if (req->bounce_buf)
@@ -412,15 +454,9 @@ void nvme_cleanup_cmd(struct nvme_request *req)
  */
 void nvme_req_destroy(struct nvme_request *req)
 {
-    struct NVMeController *ctrl = req->ac;
-
-    if (req->q && req->q->inflight && req->tag < req->q->depth)
-        nvme_inflight_release(req->q, req->tag);
-
+    nvme_inflight_release(req->q, req->cid);
     nvme_req_free_dma_buffers(req);
-
-    if (ctrl)
-        slab_free(&ctrl->req_slab, req);
+    slab_free(&req->ac->req_slab, req);
 }
 
 /*
@@ -447,8 +483,8 @@ static struct nvme_request *nvme_req_alloc_io(struct NVMeUnit *unit,
         return NULL;
     }
 
-    u16 tag = nvme_alloc_tag(q);
-    if (tag == 0xFFFF)
+    u16 cid = nvme_alloc_cid(q);
+    if (cid == 0xFFFF)
     {
         slab_free(&ctrl->req_slab, req);
         *err_out = IOERR_UNITBUSY;
@@ -459,14 +495,49 @@ static struct nvme_request *nvme_req_alloc_io(struct NVMeUnit *unit,
     req->unit = unit;
     req->ac = ctrl;
     req->q = q;
-    req->tag = tag;
-    nvme_inflight_claim(q, tag, req);
+    req->cid = cid;
+    nvme_inflight_claim(q, cid, req);
     return req;
 }
 
 /* ---------------------------------------------------------------- *
  *  Section 3: submit primitives (SQ-tail doorbell + retry)         *
  * ---------------------------------------------------------------- */
+
+/*
+ * nvme_sq_commit - ring the SQ-tail doorbell iff the tail advanced since
+ * the last write.  The device only ever needs the newest tail, so a run of
+ * SQEs written since the previous commit costs a single doorbell (mirrors
+ * Linux nvme_write_sq_db).
+ */
+static inline void nvme_sq_commit(struct nvme_queue *q)
+{
+    if (q->sq_tail != q->last_sq_tail)
+    {
+        mmio_write32((u32)q->sq_tail, (volatile UBYTE *)q->ctrl->bar0 + q->sq_db_off);
+        q->last_sq_tail = q->sq_tail;
+    }
+}
+
+/*
+ * nvme_sq_batch_begin / _end - bracket a run of nvme_submit_io calls so the
+ * SQ-tail doorbell is rung once for the whole run instead of once per command
+ * (see nvme_drain_msgport and nvme_process_completions' I/O-CQ drain).
+ *
+ * Nestable: the initial chunk pump runs inside nvme_drain_msgport's batch, so
+ * only the outermost _end commits.  The depth guard on _end keeps an
+ * unbalanced call from underflowing the counter.
+ */
+void nvme_sq_batch_begin(struct nvme_queue *q)
+{
+    q->sq_batch_depth++;
+}
+
+void nvme_sq_batch_end(struct nvme_queue *q)
+{
+    if (q->sq_batch_depth && --q->sq_batch_depth == 0)
+        nvme_sq_commit(q);
+}
 
 /*
  * nvme_submit_io - write req->cmd into req->q's SQ and ring the SQ-tail
@@ -483,11 +554,6 @@ static struct nvme_request *nvme_req_alloc_io(struct NVMeUnit *unit,
  */
 BYTE nvme_submit_io(struct nvme_request *req)
 {
-    if (!req || !req->q || !req->ac)
-    {
-        Kprintf("[nvme] submit_io: request missing queue/controller back-pointer\n");
-        return IOERR_BADADDRESS;
-    }
     struct nvme_queue *q = req->q;
 
     if (!q->sq)
@@ -507,29 +573,44 @@ BYTE nvme_submit_io(struct nvme_request *req)
         return IOERR_UNITBUSY;
     }
 
+    /* Locate the SQ slot by byte stride: 64 B normally, 128 B on an I/O queue
+     * under NVME_QUIRK_128_BYTES_SQES.  The command itself is always 64 B; any
+     * trailing slot bytes were zeroed at ring alloc and are never touched. */
+    struct nvme_command *slot;
+    if (q->sqe_128b)
+        slot = (struct nvme_command *)((UBYTE *)q->sq + ((ULONG)tail << 7));
+    else
+        slot = (struct nvme_command *)((UBYTE *)q->sq + ((ULONG)tail << 6));
+
     /* Copy the command into the SQE.  NVMe commands are little-endian
      * on the wire; the fields we wrote into req->cmd are already in
      * little-endian via cpu_to_leXX, so plain memcpy is correct. */
-    CopyMem(&req->cmd, &q->sq[tail], sizeof(req->cmd));
+    CopyMem(&req->cmd, slot, sizeof(req->cmd));
 
     /* Cache flush: device DMA-reads this SQE from DRAM.  Without
      * CachePreDMA the device may see stale cache lines and read garbage. */
-    nvme_cache_flush(&q->sq[tail], sizeof(struct nvme_command));
+    nvme_cache_flush(slot, sizeof(struct nvme_command));
 
     q->sq_tail = next;
 
     req->submit_us = get_time();
 
-    KprintfH("[nvme] submit_io: qid=%lu tag=%lu opcode=0x%02lx (%s) slot=%lu next=%lu db_off=0x%lx\n",
+    KprintfH("[nvme] submit_io: qid=%lu cid=0x%lx opcode=0x%02lx (%s) slot=%lu next=%lu db_off=0x%lx\n",
              (ULONG)q->qid,
-             (ULONG)req->tag,
+             (ULONG)req->cid,
              (ULONG)req->cmd.common.opcode,
              nvme_opcode_str(q->qid, req->cmd.common.opcode),
              (ULONG)tail,
              (ULONG)next,
              (ULONG)q->sq_db_off);
 
-    mmio_write32((u32)next, (volatile UBYTE *)req->ac->bar0 + q->sq_db_off);
+    /* Ring the SQ-tail doorbell now, unless we're inside a submit batch
+     * (nvme_drain_msgport / the I/O-CQ drain) — then nvme_sq_batch_end commits
+     * the doorbell once for the whole batch.  The SQE is already in the ring
+     * and cache-flushed, so deferring only postpones the notify, never the
+     * data. */
+    if (q->sq_batch_depth == 0)
+        nvme_sq_commit(q);
 
     return NVME_IO_ASYNC;
 }
@@ -539,7 +620,7 @@ BYTE nvme_submit_io(struct nvme_request *req)
  *
  * Used by the retry paths (nvme_retry_req's immediate-resubmit branch
  * and the watchdog's CRDT-retry-list deadline branch) after drain_cq
- * already released the original tag back to the per-queue free pool.
+ * already released the original CID back to the per-queue free pool.
  *
  * On tag-pool exhaustion fails @req via nvme_complete_rq with
  * NVME_SC_HOST_PATH_ERROR and returns NVME_IO_ASYNC so the caller
@@ -547,8 +628,8 @@ BYTE nvme_submit_io(struct nvme_request *req)
  */
 BYTE nvme_resubmit_io(struct nvme_request *req)
 {
-    u16 tag = nvme_alloc_tag(req->q);
-    if (unlikely(tag == 0xFFFF))
+    u16 cid = nvme_alloc_cid(req->q);
+    if (unlikely(cid == 0xFFFF))
     {
         Kprintf("[nvme] resubmit: tag-pool exhausted on qid=%lu\n",
                 (ULONG)req->q->qid);
@@ -556,9 +637,9 @@ BYTE nvme_resubmit_io(struct nvme_request *req)
         nvme_complete_rq(req);
         return NVME_IO_ASYNC;
     }
-    req->tag = tag;
-    req->cmd.common.command_id = tag;
-    nvme_inflight_claim(req->q, tag, req);
+    req->cid = cid;
+    nvme_inflight_claim(req->q, cid, req);
+    req->cmd.common.command_id = req->cid;
     return nvme_submit_io(req);
 }
 
@@ -647,16 +728,26 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
     struct NVMeUnit *unit = ctx->unit;
     struct NVMeController *ctrl = unit->ctrl;
     const u8 shift = (u8)unit->blockShift;
-    const ULONG mdts = ctrl->max_transfer_bytes;
+    const BOOL is_wz = (ctx->opcode == nvme_cmd_write_zeroes);
+    /* Cap siblings per request at the queue's in-flight limit (1 under
+     * NVME_QUIRK_QDEPTH_ONE) as well as the chunk-pipeline depth. */
+    const u16 io_max = ctrl->io_max_inflight;
+    const u16 sib_cap = io_max < NVME_MAX_INFLIGHT_PER_IO ? io_max
+                                                          : NVME_MAX_INFLIGHT_PER_IO;
 
-    while (ctx->dispatched < ctx->total_bytes && ctx->inflight < NVME_MAX_INFLIGHT_PER_IO)
+    while (ctx->dispatched < ctx->total_bytes && ctx->inflight < sib_cap)
     {
         const u32 remaining = ctx->total_bytes - ctx->dispatched;
-        u32 next_bytes = remaining;
-        if (mdts && next_bytes > mdts)
-            next_bytes = mdts;
-        const u32 next_blocks = next_bytes >> shift;
         const u64 next_lba = ctx->start_lba + (u64)(ctx->dispatched >> shift);
+        /* Per-chunk byte cap: Write Zeroes is bounded by max_zeroes_sectors/NLB
+         * and carries no data; read/write is bounded by MDTS and, under
+         * NVME_QUIRK_STRIPE_SIZE, the next stripe boundary from next_lba. */
+        const u32 chunk_cap = is_wz ? unit->wz_max_bytes
+                                    : nvme_rw_chunk_cap(ctrl, shift, next_lba);
+        u32 next_bytes = remaining;
+        if (chunk_cap && next_bytes > chunk_cap)
+            next_bytes = chunk_cap;
+        const u32 next_blocks = next_bytes >> shift;
         APTR next_buf = (APTR)((ULONG)ctx->user_data + ctx->dispatched);
 
         BYTE err;
@@ -666,6 +757,7 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
             /* tag / pool pressure: if we already have siblings in
              * flight, let them drain and re-pump from CQE.  If we
              * have nothing in flight, latch the error and bail. */
+            //TODO don't bail
             if (ctx->inflight == 0)
             {
                 ctx->first_error = err;
@@ -675,7 +767,11 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
         }
         req->ctx = ctx;
 
-        BYTE serr = nvme_setup_rw(req, next_lba, next_blocks, ctx->opcode, next_buf);
+        BYTE serr = 0;
+        if (unlikely(is_wz))
+            nvme_setup_write_zeroes(req, next_lba, next_blocks);
+        else
+            serr = nvme_setup_rw(req, next_lba, next_blocks, ctx->opcode, next_buf);
         if (serr)
         {
             nvme_req_destroy(req);
@@ -690,13 +786,14 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
         ctx->dispatched += next_bytes;
         ctx->inflight++;
 
-        KprintfH("[nvme] ctx_pump: dispatched chunk ctx=%lx tag=%lu offset=%lu bytes=%lu inflight=%lu\n",
-                 (ULONG)ctx, (ULONG)req->tag,
+        KprintfH("[nvme] ctx_pump: dispatched chunk ctx=%lx cid=0x%lx offset=%lu bytes=%lu inflight=%lu\n",
+                 (ULONG)ctx, (ULONG)req->cid,
                  (ULONG)(ctx->dispatched - next_bytes),
                  (ULONG)next_bytes, (ULONG)ctx->inflight);
 
         if (nvme_submit_io(req) != NVME_IO_ASYNC)
         {
+            // TODO is this needed. we shuld put it to backpressure buffer
             /* Rollback accounting; the request has not entered the SQ.
              * nvme_submit_io already destroyed @req. */
             ctx->dispatched -= next_bytes;
@@ -752,6 +849,11 @@ void nvme_io_context_finish(struct nvme_io_context *ctx)
  * decrements ctx->inflight, refills the slot via _pump, and replies
  * the originating IOStdReq via _finish once the last sibling lands.
  *
+ * Validates its arguments before allocating any request: a zero-length
+ * transfer returns IOERR_BADLENGTH; a NULL @buffer (a caller error, not a
+ * zero-fill request) or an LBA range past the namespace returns
+ * IOERR_BADADDRESS.
+ *
  * Returns NVME_IO_ASYNC on success or IOERR_* on synchronous failure.
  */
 BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
@@ -759,13 +861,35 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
 {
     struct NVMeController *ctrl = unit->ctrl;
     const ULONG bytes = blocks << unit->blockShift;
-    const ULONG mdts = ctrl->max_transfer_bytes;
+    /* MDTS ceiling, further reduced to the next stripe boundary under
+     * NVME_QUIRK_STRIPE_SIZE.  A transfer that fits within one cap from its
+     * start LBA is a single command; otherwise it is chunked (boundary-aligned). */
+    const u32 cap = nvme_rw_chunk_cap(ctrl, (u8)unit->blockShift, lba);
 
-    if (bytes == 0)
+    if (unlikely(bytes == 0))
+    {
+        KprintfH("[nvme] %s: zero-length transfer (blocks=%lu blockShift=%lu)\n",
+                 __func__, blocks, (ULONG)unit->blockShift);
         return IOERR_BADLENGTH;
+    }
+
+    if (unlikely(buffer == NULL))
+    {
+        KprintfH("[nvme] %s: NULL buffer for opcode 0x%02lx (unit %ld)\n",
+                 __func__, (ULONG)opcode, unit->unitNumber);
+        return IOERR_BADADDRESS;
+    }
+
+    if (unlikely(unit->logicalSectors > 0 && lba + blocks > unit->logicalSectors))
+    {
+        KprintfH("[nvme] %s: LBA out of range (lba=0x%08lx%08lx blocks=%lu logicalSectors=%lu)\n",
+                 __func__, (ULONG)(lba >> 32), (ULONG)lba, blocks,
+                 (ULONG)unit->logicalSectors);
+        return IOERR_BADADDRESS;
+    }
 
     /* Single-shot fast path. */
-    if (mdts == 0 || bytes <= mdts)
+    if (cap == 0 || bytes <= cap)
     {
         BYTE err;
         struct nvme_request *req = nvme_req_alloc_io(unit, io, &err);
@@ -789,8 +913,7 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
 
     /* Multi-chunk path.  Readiness check up front — the pump itself
      * has no nvme_request yet to route through nvme_fail_nonready_command. */
-    enum nvme_ctrl_state state = nvme_ctrl_state(ctrl);
-    if (unlikely(state != NVME_CTRL_LIVE))
+    if (unlikely(!nvme_check_ready(ctrl)))
         return nvme_state_terminal(ctrl) ? IOERR_BADADDRESS : IOERR_UNITBUSY;
 
     struct nvme_io_context *ctx = slab_zalloc(&ctrl->ctx_slab);
@@ -804,8 +927,8 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
     ctx->opcode = opcode;
     ctx->user_data = buffer;
 
-    KprintfH("[nvme] io_submit_rw: ctx=%lx io_Length=%lu mdts=%lu — multi-chunk\n",
-             (ULONG)ctx, bytes, mdts);
+    KprintfH("[nvme] io_submit_rw: ctx=%lx io_Length=%lu chunk_cap=%lu — multi-chunk\n",
+             (ULONG)ctx, bytes, (ULONG)cap);
 
     BYTE err = nvme_io_context_pump(ctx);
     if (err != NVME_IO_ASYNC)
@@ -831,6 +954,96 @@ BYTE nvme_io_submit_flush(struct NVMeUnit *unit, struct IOStdReq *io)
 
     nvme_setup_flush(req);
     return nvme_submit_io(req);
+}
+
+/*
+ * nvme_io_submit_write_zeroes - zero [lba, lba+blocks) with no data transfer.
+ *
+ * Honors two quirks:
+ *  - NVME_QUIRK_DEALLOCATE_ZEROES: the controller guarantees deallocated blocks
+ *    read back as zeroes, so a single DSM-Deallocate zeroes the range (faster).
+ *  - NVME_QUIRK_DISABLE_WRITE_ZEROES (and devices lacking Write Zeroes): seen as
+ *    ctrl->max_zeroes_sectors == 0 → reported unsupported (IOERR_NOCMD).
+ * Otherwise issues Write Zeroes, splitting ranges larger than one command's
+ * cap through the shared chunk scheduler.
+ *
+ * Like nvme_io_submit_rw, validates length and namespace bounds itself:
+ * zero blocks → IOERR_BADLENGTH, an LBA range past the namespace →
+ * IOERR_BADADDRESS.
+ */
+BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
+                                 u64 lba, ULONG blocks)
+{
+    struct NVMeController *ctrl = unit->ctrl;
+
+    if (unlikely(blocks == 0))
+    {
+        KprintfH("[nvme] %s: zero-length write-zeroes\n", __func__);
+        return IOERR_BADLENGTH;
+    }
+
+    if (unlikely(unit->logicalSectors > 0 && lba + blocks > unit->logicalSectors))
+    {
+        KprintfH("[nvme] %s: write-zeroes LBA out of range (lba=0x%08lx%08lx blocks=%lu logicalSectors=%lu)\n",
+                 __func__, (ULONG)(lba >> 32), (ULONG)lba, blocks,
+                 (ULONG)unit->logicalSectors);
+        return IOERR_BADADDRESS;
+    }
+
+    if (ctrl->quirks & NVME_QUIRK_DEALLOCATE_ZEROES)
+    {
+        struct nvme_dsm_range *ranges =
+            dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE,
+                       sizeof(*ranges) * NVME_DSM_MAX_RANGES);
+        if (!ranges)
+            return IOERR_SELFTEST;
+        ranges[0].cattr = le32(0);
+        ranges[0].nlb = le32(blocks);
+        ranges[0].slba = le64(lba);
+        return nvme_io_submit_dsm(unit, io, ranges, 1);
+    }
+
+    if (ctrl->max_zeroes_sectors == 0)
+    {
+        KprintfH("[nvme] %s: write-zeroes unsupported (max_zeroes_sectors=0)\n", __func__);
+        return IOERR_NOCMD;
+    }
+
+    const ULONG bytes = blocks << unit->blockShift;
+    /* Single-shot fast path. */
+    if (bytes <= unit->wz_max_bytes)
+    {
+        BYTE err;
+        struct nvme_request *req = nvme_req_alloc_io(unit, io, &err);
+        if (!req)
+            return err;
+        if (unlikely(!nvme_check_ready(ctrl)))
+            return nvme_fail_nonready_command(req);
+        nvme_setup_write_zeroes(req, lba, blocks);
+        return nvme_submit_io(req);
+    }
+
+    /* Multi-chunk via the shared scheduler (ctx->opcode steers the pump). */
+    if (unlikely(!nvme_check_ready(ctrl)))
+        return nvme_state_terminal(ctrl) ? IOERR_BADADDRESS : IOERR_UNITBUSY;
+
+    struct nvme_io_context *ctx = slab_zalloc(&ctrl->ctx_slab);
+    if (!ctx)
+        return IOERR_SELFTEST;
+    ctx->io = io;
+    ctx->unit = unit;
+    ctx->start_lba = lba;
+    ctx->total_bytes = (u32)bytes;
+    ctx->opcode = nvme_cmd_write_zeroes;
+    ctx->user_data = NULL;
+
+    BYTE err = nvme_io_context_pump(ctx);
+    if (err != NVME_IO_ASYNC)
+    {
+        slab_free(&ctrl->ctx_slab, ctx);
+        return err;
+    }
+    return NVME_IO_ASYNC;
 }
 
 /*

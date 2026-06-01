@@ -30,8 +30,13 @@ struct IOStdReq;
  * into sibling commands ridden by a parent nvme_io_context; up to
  * NVME_MAX_INFLIGHT_PER_IO siblings are kept in flight.
  *
- * Callers must have validated namespace bounds (LBA, block count)
- * before calling.
+ * nvme_io_submit_rw and nvme_io_submit_write_zeroes validate length and
+ * namespace bounds themselves: a zero-length transfer returns
+ * IOERR_BADLENGTH and an LBA range past the namespace returns
+ * IOERR_BADADDRESS.  nvme_io_submit_rw additionally rejects a NULL
+ * @buffer (a caller error, not a zero-fill request) with IOERR_BADADDRESS.
+ * For nvme_io_submit_dsm the caller validates each range while building
+ * the list.
  *
  * nvme_io_submit_dsm: @ranges must be a dma_zalloc'd page-aligned
  * buffer of size sizeof(*ranges) * NVME_DSM_MAX_RANGES (4 KiB) with
@@ -47,6 +52,8 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
 BYTE nvme_io_submit_flush(struct NVMeUnit *unit, struct IOStdReq *io);
 BYTE nvme_io_submit_dsm(struct NVMeUnit *unit, struct IOStdReq *io,
                         struct nvme_dsm_range *ranges, u16 nr);
+BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
+                                 u64 lba, ULONG blocks);
 
 /*
  * nvme_io_context_pump - dispatch as many chunk siblings as the

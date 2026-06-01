@@ -57,7 +57,13 @@
  */
 static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u16 qid, u16 depth)
 {
-    const ULONG sq_bytes = (ULONG)depth * sizeof(struct nvme_command);
+    /* SQE stride: 64 B normally; 128 B on the I/O queue when
+     * NVME_QUIRK_128_BYTES_SQES is set (some Apple controllers require a
+     * non-standard stride and ignore CC.IOSQES).  Admin (qid 0) is always 64. */
+    const BOOL sqe_128b = (qid != 0 && (ctrl->quirks & NVME_QUIRK_128_BYTES_SQES)) != 0;
+    const ULONG sq_bytes = (ULONG)depth *
+                           (sqe_128b ? (ULONG)(2u * sizeof(struct nvme_command))
+                                     : (ULONG)sizeof(struct nvme_command));
     const ULONG cq_bytes = (ULONG)depth * sizeof(struct nvme_completion);
     const ULONG inflight_bytes = (ULONG)depth * sizeof(struct nvme_request *);
 
@@ -68,6 +74,8 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
     q->ctrl = ctrl;
     q->qid = qid;
     q->depth = depth;
+    q->sqe_128b = sqe_128b;
+    q->skip_cid_gen = (ctrl->quirks & NVME_QUIRK_SKIP_CID_GEN) != 0;
     q->cq_phase = 1;
     q->sq_db_off = NVME_REG_DBS + (u32)(2u * qid) * ctrl->db_stride;
     q->cq_db_off = NVME_REG_DBS + (u32)(2u * qid + 1u) * ctrl->db_stride;
@@ -105,7 +113,9 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
         goto fail_free_stack;
     }
     /* Push every CID onto the free stack in reverse so the first pop
-     * returns CID 0 (low-numbered tags first — friendlier for tracing). */
+     * returns CID 0 (low-numbered tags first — friendlier for tracing).
+     * Entries are encoded CIDs with generation 0, which equal the bare tag;
+     * nvme_inflight_release re-pushes them with the bumped generation. */
     for (u16 i = 0; i < depth; i++)
         q->free_stack[i] = (u16)(depth - 1 - i);
     q->free_top = depth;
@@ -181,27 +191,35 @@ static void drain_cq(struct nvme_queue *q)
         const u16 status_le = le16(cqe->status);
         const u16 cqe_phase = status_le & 1;
         const u16 status = status_le >> 1;
-        const u16 cid = cqe->command_id;
+        const u16 raw_cid = cqe->command_id;
 
         if (cqe_phase != phase)
             break; /* nothing fresh */
 
-        struct nvme_request *req = (cid < q->depth) ? q->inflight[cid] : NULL;
-        if (req)
+        /* The slot index is the low 12 bits; the generation packed above it
+         * guards against stale/duplicate CQEs for a reused slot.  The expected
+         * generation lives in the in-flight request's own cid, so a fresh CQE
+         * matches iff raw_cid == req->cid (under SKIP_CID_GEN both are the bare
+         * tag, so this still holds). */
+        const u16 tag = raw_cid & 0x0fff;
+
+        struct nvme_request *req = (tag < q->depth) ? q->inflight[tag] : NULL;
+        if (req && raw_cid == req->cid)
         {
             req->status = status;
             req->result = cqe->result;
-            nvme_inflight_release(q, cid);
-            KprintfH("[nvme] CQE: qid=%lu head=%lu cid=%lu status=0x%04lx (%s) phase=%lu → completing %s\n",
-                     (ULONG)q->qid, (ULONG)head, (ULONG)cid,
+            nvme_inflight_release(q, req->cid);
+            KprintfH("[nvme] CQE: qid=%lu head=%lu cid=0x%lx status=0x%04lx (%s) phase=%lu → completing %s\n",
+                     (ULONG)q->qid, (ULONG)head, (ULONG)req->cid,
                      (ULONG)status, nvme_get_error_status_str(status), (ULONG)cqe_phase,
                      req->unit ? "I/O" : "admin");
             nvme_complete_rq(req);
         }
         else
         {
-            Kprintf("[nvme] drain_cq: unexpected CQE qid=%lu head=%lu cid=%lu status=0x%lx (%s) phase=%lu\n",
-                    (ULONG)q->qid, (ULONG)head, (ULONG)cid,
+            Kprintf("[nvme] drain_cq: %s CQE qid=%lu head=%lu cid=0x%lx status=0x%lx (%s) phase=%lu\n",
+                    req ? "stale (cid mismatch)" : "unexpected",
+                    (ULONG)q->qid, (ULONG)head, (ULONG)raw_cid,
                     (ULONG)status, nvme_get_error_status_str(status), (ULONG)cqe_phase);
         }
 
@@ -230,7 +248,14 @@ static void drain_cq(struct nvme_queue *q)
 void nvme_process_completions(struct NVMeController *ctrl)
 {
     drain_cq(&ctrl->admin_q);
+
+    /* Draining the I/O CQ can resubmit work on the same queue: chunked-I/O
+     * refills (nvme_io_context_pump) and CRDT/transient retries
+     * (nvme_resubmit_io) both fire from nvme_complete_rq.  Batch their SQ-tail
+     * doorbells into a single commit for the whole drain pass. */
+    nvme_sq_batch_begin(&ctrl->io_q);
     drain_cq(&ctrl->io_q);
+    nvme_sq_batch_end(&ctrl->io_q);
 }
 
 /*
@@ -244,7 +269,7 @@ void nvme_process_completions(struct NVMeController *ctrl)
  *
  *   2. First timeout (elapsed >= NVME_IO_TIMEOUT / NVME_ADMIN_TIMEOUT,
  *      NVME_REQ_ABORT_SENT not yet set) — submit an Abort admin
- *      command targeting (sqid=q->qid, cid=req->tag), mark the
+ *      command targeting (sqid=q->qid, cid=req->cid), mark the
  *      request NVME_REQ_ABORT_SENT, stash abort_us = now.  The
  *      request stays in inflight[]: the original or NVME_SC_ABORT_REQ
  *      CQE will arrive via the normal drain_cq path.
@@ -281,9 +306,9 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
             if ((now - req->abort_us) / 1000U < NVME_ABORT_TIMEOUT)
                 continue;
 
-            KprintfH("[nvme] abort grace expired: qid=%lu tag=%lu "
+            KprintfH("[nvme] abort grace expired: qid=%lu cid=0x%lx "
                      "opcode=0x%02lx — requesting controller reset\n",
-                     (ULONG)q->qid, (ULONG)req->tag,
+                     (ULONG)q->qid, (ULONG)req->cid,
                      (ULONG)req->cmd.common.opcode);
             Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
             return; /* one reset is enough per tick */
@@ -300,23 +325,23 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
          * straight to controller reset. */
         if (req->cmd.common.opcode == nvme_admin_abort_cmd)
         {
-            Kprintf("[nvme] abort cmd itself timed out: tag=%lu — reset\n",
-                    (ULONG)req->tag);
+            Kprintf("[nvme] abort cmd itself timed out: cid=0x%lx — reset\n",
+                    (ULONG)req->cid);
             Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
             return;
         }
 
-        Kprintf("[nvme] timeout: qid=%lu tag=%lu opcode=0x%02lx (%s) "
+        Kprintf("[nvme] timeout: qid=%lu cid=0x%lx opcode=0x%02lx (%s) "
                 "elapsed=%lu ms — issuing Abort\n",
-                (ULONG)q->qid, (ULONG)req->tag,
+                (ULONG)q->qid, (ULONG)req->cid,
                 (ULONG)req->cmd.common.opcode,
                 nvme_opcode_str(q->qid, req->cmd.common.opcode),
                 (ULONG)elapsed_ms);
 
         if (nvme_abort_request(ctrl, req) != 0)
         {
-            Kprintf("[nvme] failed to submit Abort for qid=%lu tag=%lu\n",
-                    (ULONG)q->qid, (ULONG)req->tag);
+            Kprintf("[nvme] failed to submit Abort for qid=%lu cid=0x%lx\n",
+                    (ULONG)q->qid, (ULONG)req->cid);
             continue;
         }
 
@@ -486,14 +511,20 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
         goto fail;
     }
 
-    /* Step 3b: Create I/O SQ pointing at the CQ just created. */
+    /* Step 3b: Create I/O SQ pointing at the CQ just created.
+     * NVME_QUIRK_MEDIUM_PRIO_SQ: some drives (Intel 600p / P3100) auto-enable
+     * weighted-round-robin internally unless the SQ priority is MEDIUM; since
+     * URGENT encodes as zero, leaving it default makes every queue URGENT.
+     * Setting QPRIO=MEDIUM works around the bug regardless of host CC.AMS. */
+    const u16 sq_prio = (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
+                            ? NVME_SQ_PRIO_MEDIUM
+                            : NVME_SQ_PRIO_URGENT;
     mem_zero(&cmd, sizeof(cmd));
     cmd.create_sq.opcode = nvme_admin_create_sq;
     cmd.create_sq.prp1 = le64((u64)(ULONG)ctrl->io_q.sq);
     cmd.create_sq.sqid = le16(NVME_IO_QID);
     cmd.create_sq.qsize = le16(NVME_IO_QUEUE_SIZE - 1);
-    cmd.create_sq.sq_flags = le16(NVME_QUEUE_PHYS_CONTIG |
-                                  NVME_SQ_PRIO_URGENT);
+    cmd.create_sq.sq_flags = le16(NVME_QUEUE_PHYS_CONTIG | sq_prio);
     cmd.create_sq.cqid = le16(NVME_IO_QID);
     ret = nvme_submit_sync_cmd(ctrl, &cmd, NULL, NULL, 0);
     if (ret)
@@ -501,6 +532,12 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
         Kprintf("[nvme] %s: Create I/O SQ failed: %ld\n", __func__, ret);
         goto fail;
     }
+
+    /* Cache the in-flight ceiling now io_q.depth is known; read directly as
+     * ctrl->io_max_inflight on every dispatch / back-pressure check. */
+    ctrl->io_max_inflight = (ctrl->quirks & NVME_QUIRK_QDEPTH_ONE)
+                                ? 1
+                                : (ctrl->io_q.depth > 1 ? (u16)(ctrl->io_q.depth - 1) : 1);
 
     KprintfH("[nvme] %s: I/O queue pair (QID=%lu) ready, SQ@%lx CQ@%lx\n",
              __func__, (ULONG)NVME_IO_QID,
@@ -526,7 +563,7 @@ fail:
  */
 void nvme_cancel_request(struct nvme_request *req)
 {
-    KprintfH("[nvme] cancel: tag %lu\n", (ULONG)req->tag);
+    KprintfH("[nvme] cancel: cid 0x%lx\n", (ULONG)req->cid);
     req->status = NVME_SC_HOST_ABORTED_CMD;
     req->flags |= NVME_REQ_CANCELLED;
     nvme_complete_rq(req);
@@ -549,7 +586,7 @@ void nvme_flush_queue_inflight(struct nvme_queue *q)
         struct nvme_request *req = q->inflight[i];
         if (req)
         {
-            nvme_inflight_release(q, i);
+            nvme_inflight_release(q, req->cid);
             nvme_cancel_request(req);
         }
     }

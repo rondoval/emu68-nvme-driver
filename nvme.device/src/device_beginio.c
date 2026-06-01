@@ -19,7 +19,7 @@
 static const UWORD SupportedCommands[] = {
     CMD_READ,
     CMD_WRITE,
-    CMD_UPDATE, /* quick */
+    CMD_UPDATE,
     CMD_CLEAR,  /* quick */
     CMD_STOP,   /* standby? */
     CMD_START,  /* resume? */
@@ -39,7 +39,7 @@ static const UWORD SupportedCommands[] = {
     ETD_FORMAT,
     ETD_READ,
     ETD_WRITE,
-    ETD_UPDATE, /* quick */
+    ETD_UPDATE,
     ETD_CLEAR,  /* quick */
     NSCMD_TD_READ64,
     NSCMD_TD_WRITE64,
@@ -50,6 +50,8 @@ static const UWORD SupportedCommands[] = {
     NSCMD_DEVICEQUERY, /* quick */
     NSCMD_NVME_ADMIN_PASS,
     NSCMD_NVME_IO_PASS,
+    NSCMD_NVME_TRIM,
+    NSCMD_NVME_WRITE_ZEROES,
     0};
 
 /*

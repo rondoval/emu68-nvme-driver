@@ -34,9 +34,9 @@
 #include <nvme/nvme_ctrl.h>  /* nvme_admin_ctrl, nvme_change_ctrl_state, nvme_init_identify */
 #include <nvme/nvme_hmb.h>
 #include <nvme/nvme_probe.h>
-#include <nvme/nvme_queue.h> /* nvme_setup_admin_queue, nvme_setup_io_queue, nvme_unquiesce_io_queues */
+#include <nvme/nvme_queue.h>  /* nvme_setup_admin_queue, nvme_setup_io_queue, nvme_unquiesce_io_queues */
 #include <nvme/nvme_quirks.h> /* nvme_lookup_quirks */
-#include <nvme/nvme_scan.h>  /* nvme_scan_namespaces */
+#include <nvme/nvme_scan.h>   /* nvme_scan_namespaces */
 
 /* NVMe PCI class code: Mass Storage / NVM Express (base 0x01, sub 0x08, prog-if 0x02) */
 #define NVME_PCI_CLASS 0x010802UL
@@ -199,6 +199,11 @@ static int nvme_init_ctrl_finish(struct NVMeController *ctrl, BOOL was_suspended
     ret = nvme_configure_host_options(ctrl);
     if (ret < 0)
         return ret;
+
+    /* Optional interrupt coalescing — no-op unless DEVICE_IRQ_COALESCE_*
+     * are set non-zero.  Best-effort: a controller that rejects it must
+     * not fail probe. */
+    nvme_configure_irq_coalesce(ctrl);
 
     clear_bit(NVME_CTRL_DIRTY_CAPABILITY, &ctrl->flags);
     ctrl->identified = TRUE;
@@ -376,17 +381,32 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         goto fail_hw;
     }
 
+    /* Initialise the state machine (NEW), namespaces MinList, scan_lock, and seed
+     * ctrl->quirks from the PCI ID table — BEFORE the slab caches (so
+     * NVME_QUIRK_DMAPOOL_ALIGN_512 can steer the small-pool alignment), the task
+     * spawns, and nvme_int_enable (so NVME_QUIRK_BROKEN_MSI can steer interrupt
+     * setup). */
+    nvme_init_ctrl(ctrl, nvme_lookup_quirks(ctrl->pci_dev));
+
     /* Hot-path slab caches.  Capacities sized to amortise per-grow
      * dma_alloc cost against worst-case in-flight working set:
-     *   req_slab      — 64 per grow (peak ≈ IOQD 256 + admin 16).
-     *   ctx_slab      — 16 per grow (chunked-I/O parent contexts).
-     *   prp_page_slab — 16 per grow (≤8 list pages × NVME_MAX_INFLIGHT_PER_IO). */
+     *   req_slab       — 64 per grow (peak ≈ IOQD 256 + admin 16).
+     *   ctx_slab       — 16 per grow (chunked-I/O parent contexts).
+     *   prp_large_slab — 16 per grow (4 KiB; chained / >32-entry lists, rare).
+     *   prp_small_slab — 64 per grow (256 B; the common ≤128 KiB transfer).
+     * The small pool is 256 B / 32 entries (Linux's prp_small_pool); its
+     * alignment is bumped to 512 B under NVME_QUIRK_DMAPOOL_ALIGN_512. */
     slab_cache_init(&ctrl->req_slab, ctrl->memoryPool,
                     sizeof(struct nvme_request), 0, 64);
     slab_cache_init(&ctrl->ctx_slab, ctrl->memoryPool,
                     sizeof(struct nvme_io_context), 0, 16);
-    slab_cache_init(&ctrl->prp_page_slab, ctrl->memoryPool,
+    slab_cache_init(&ctrl->prp_large_slab, ctrl->memoryPool,
                     NVME_CTRL_PAGE_SIZE, NVME_CTRL_PAGE_SIZE, 16);
+    slab_cache_init(&ctrl->prp_small_slab, ctrl->memoryPool,
+                    NVME_SMALL_POOL_SIZE,
+                    (ctrl->quirks & NVME_QUIRK_DMAPOOL_ALIGN_512) ? 512u
+                                                                  : NVME_SMALL_POOL_SIZE,
+                    64);
 
     ret = task_spawn(ctrl, UnitTask, "NVMe storage driver");
     if (ret != ERR_NO_ERROR)
@@ -408,10 +428,6 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         Kprintf("[nvme] %s: nvme_int_enable failed: %ld\n", __func__, ret);
         goto fail_admin_task;
     }
-
-    // Initialise the state machine to NEW, namespaces MinList, scan_lock semaphore.
-    // Seed ctrl->quirks from the PCI ID table (matched on vendor:device).
-    nvme_init_ctrl(ctrl, nvme_lookup_quirks(ctrl->pci_dev));
 
     KprintfH("[nvme] %s: calling nvme_disable_ctrl (CC.EN=0, wait RDY=0)\n", __func__);
     if (nvme_disable_ctrl(ctrl, FALSE) != 0)
@@ -499,7 +515,8 @@ fail_admin_task:
 fail_unit_task:
     task_join(&ctrl->unit_task);
 fail_pool:
-    slab_cache_destroy(&ctrl->prp_page_slab);
+    slab_cache_destroy(&ctrl->prp_small_slab);
+    slab_cache_destroy(&ctrl->prp_large_slab);
     slab_cache_destroy(&ctrl->ctx_slab);
     slab_cache_destroy(&ctrl->req_slab);
     DeletePool(ctrl->memoryPool);
@@ -521,7 +538,8 @@ fail_hw:
 struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
                                      u32 nsid,
                                      ULONG blockSize, u8 blockShift,
-                                     u64 logicalSectors)
+                                     u64 logicalSectors,
+                                     ULONG features)
 {
     struct NVMeDevice *base = ctrl->device;
 
@@ -538,6 +556,20 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
     unit->blockSize = blockSize;
     unit->blockShift = blockShift;
     unit->logicalSectors = logicalSectors;
+    unit->features = features;
+
+    /* Cache the per-unit Write Zeroes byte cap (read on the write-zeroes
+     * dispatch paths): min(controller max_zeroes_sectors, the command's
+     * 16-bit NLB = 64K logical blocks), block-aligned.  Pure function of
+     * max_zeroes_sectors (set at identify, before scan) and blockShift, so
+     * it shares blockShift's validity lifetime. */
+    u64 by_dev = (u64)ctrl->max_zeroes_sectors << SECTOR_SHIFT;
+    u64 by_nlb = (u64)0x10000u << blockShift;
+    u64 lim = (by_dev < by_nlb) ? by_dev : by_nlb;
+    if (lim > 0xFFFFFFFFu)
+        lim = 0xFFFFFFFFu;
+    unit->wz_max_bytes = (u32)lim & ~((1u << blockShift) - 1u);
+
     unit->changeCount = 1; /* present media; iotd_Count of 0 is "stale" */
 
     /* base->units is walked lockless by openLib (device.c) and now mutated
@@ -667,7 +699,8 @@ void nvme_unprobe_all(struct NVMeDevice *base)
                 pool_free(ctrl->memoryPool, ctrl->effects);
                 ctrl->effects = NULL;
             }
-            slab_cache_destroy(&ctrl->prp_page_slab);
+            slab_cache_destroy(&ctrl->prp_small_slab);
+            slab_cache_destroy(&ctrl->prp_large_slab);
             slab_cache_destroy(&ctrl->ctx_slab);
             slab_cache_destroy(&ctrl->req_slab);
             DeletePool(ctrl->memoryPool);

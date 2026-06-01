@@ -957,13 +957,6 @@ BYTE handle_scsi_cmd(struct IOStdReq *io)
         /* fall through to do_scsi_transfer */
 
     do_scsi_transfer:
-        if (cmd->scsi_Data == NULL || (lba + count) > unit->logicalSectors)
-        {
-            error = IOERR_BADADDRESS;
-            scsi_make_sense(cmd, (ULONG)lba, count, error);
-            break;
-        }
-
         error = nvme_io_submit_rw(unit, io, lba, count,
                                   (cmd->scsi_Flags & SCSIF_READ) ? nvme_cmd_read : nvme_cmd_write,
                                   cmd->scsi_Data);

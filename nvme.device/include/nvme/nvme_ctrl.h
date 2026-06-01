@@ -17,77 +17,130 @@ struct pci_dev;
 #define NVME_QUIRK_DELAY_AMOUNT 2300
 
 /*
- * List of workarounds for devices that required behavior not specified in
- * the standard.
+ * Per-controller workaround bits for controllers that need behavior the NVMe
+ * specification does not define.  The set is gathered when a controller is
+ * identified and consulted wherever the affected decision is made.
+ *
+ * Every bit below records two things: the device problem, and what this driver
+ * does about it (the "Driver:" note).  "Driver: nothing to do" means the bit is
+ * accepted but needs no action here -- either the driver already always behaves
+ * the way the bit asks, or the feature the bit concerns (system suspend,
+ * temperature-threshold programming, wide DMA addresses, and the like) does not
+ * exist on this platform.
  */
 enum nvme_quirks
 {
 	/*
 	 * Prefers I/O aligned to a stripe size specified in a vendor
 	 * specific Identify field.
+	 *
+	 * Driver: read and write transfers are broken into pieces so that no
+	 * single command crosses one of these stripe boundaries.
 	 */
 	NVME_QUIRK_STRIPE_SIZE = (1 << 0),
 
 	/*
 	 * The controller doesn't handle Identify value others than 0 or 1
 	 * correctly.
+	 *
+	 * Driver: the range of Identify selector values issued is clamped to
+	 * what such a controller accepts.
 	 */
 	NVME_QUIRK_IDENTIFY_CNS = (1 << 1),
 
 	/*
 	 * The controller deterministically returns 0's on reads to
 	 * logical blocks that deallocate was called on.
+	 *
+	 * Driver: a request to zero a range is carried out with a single
+	 * deallocate command, which then reads back as zeroes on such a
+	 * controller -- faster than writing zeroes.
 	 */
 	NVME_QUIRK_DEALLOCATE_ZEROES = (1 << 2),
 
 	/*
 	 * The controller needs a delay before starts checking the device
 	 * readiness, which is done by reading the NVME_CSTS_RDY bit.
+	 *
+	 * Driver: a fixed delay is inserted before the ready bit is first
+	 * polled during start-up.
 	 */
 	NVME_QUIRK_DELAY_BEFORE_CHK_RDY = (1 << 3),
 
 	/*
-	 *  Problems seen with concurrent commands
+	 * Problems seen with concurrent commands.
+	 *
+	 * Driver: only one I/O command is kept outstanding at a time;
+	 * further requests are held and submitted as earlier ones complete.
 	 */
 	NVME_QUIRK_QDEPTH_ONE = (1 << 6),
 
 	/*
-	 * Set MEDIUM priority on SQ creation
+	 * Set MEDIUM priority on SQ creation.
+	 *
+	 * Driver: the I/O submission queue is created with medium priority,
+	 * which stops such a controller from internally treating every queue
+	 * as urgent.
 	 */
 	NVME_QUIRK_MEDIUM_PRIO_SQ = (1 << 7),
 
 	/*
 	 * Ignore device provided subnqn.
+	 *
+	 * Driver: nothing to do -- the device-supplied subsystem name is
+	 * never read here, so there is nothing to ignore.
 	 */
 	NVME_QUIRK_IGNORE_DEV_SUBNQN = (1 << 8),
 
 	/*
 	 * Broken Write Zeroes.
+	 *
+	 * Driver: the Write Zeroes command is treated as unavailable, so a
+	 * zeroing request is reported unsupported rather than sent to such a
+	 * controller.
 	 */
 	NVME_QUIRK_DISABLE_WRITE_ZEROES = (1 << 9),
 
 	/*
 	 * Force simple suspend/resume path.
+	 *
+	 * Driver: nothing to do -- there is no system suspend or resume on
+	 * this platform; the controller is fully started when first used and
+	 * fully stopped when released, which is what this path amounts to.
 	 */
 	NVME_QUIRK_SIMPLE_SUSPEND = (1 << 10),
 
 	/*
-	 * Use only one interrupt vector for all queues
+	 * Use only one interrupt vector for all queues.
+	 *
+	 * Driver: nothing to do -- a single interrupt is always used for both
+	 * the admin and I/O queues, and more than one vector is never
+	 * requested.
 	 */
 	NVME_QUIRK_SINGLE_VECTOR = (1 << 11),
 
 	/*
 	 * Use non-standard 128 bytes SQEs.
+	 *
+	 * Driver: entries in the I/O submission queue are spaced 128 bytes
+	 * apart instead of 64 (the command itself is still 64 bytes); the
+	 * admin queue is left at 64.
 	 */
 	NVME_QUIRK_128_BYTES_SQES = (1 << 12),
 
 	/*
-	 * Prevent tag overlap between queues
+	 * Prevent tag overlap between queues.
+	 *
+	 * Driver: nothing to do -- the admin and I/O queues already use
+	 * separate command-identifier spaces, and the controllers that need
+	 * this are not reachable on this hardware.
 	 */
 	NVME_QUIRK_SHARED_TAGS = (1 << 13),
 
 	/*
-	 * Don't change the value of the temperature threshold feature
+	 * Don't change the value of the temperature threshold feature.
+	 *
+	 * Driver: nothing to do -- temperature thresholds are never written.
 	 */
 	NVME_QUIRK_NO_TEMP_THRESH_CHANGE = (1 << 14),
 
@@ -95,43 +148,69 @@ enum nvme_quirks
 	 * The controller doesn't handle the Identify Namespace
 	 * Identification Descriptor list subcommand despite claiming
 	 * NVMe 1.3 compliance.
+	 *
+	 * Driver: the namespace identification descriptor list is not
+	 * requested from such a controller.
 	 */
 	NVME_QUIRK_NO_NS_DESC_LIST = (1 << 15),
 
 	/*
 	 * The controller does not properly handle DMA addresses over
 	 * 48 bits.
+	 *
+	 * Driver: nothing to do -- every address handed to the controller
+	 * already fits well within 48 bits.
 	 */
 	NVME_QUIRK_DMA_ADDRESS_BITS_48 = (1 << 16),
 
 	/*
 	 * The controller requires the command_id value be limited, so skip
 	 * encoding the generation sequence number.
+	 *
+	 * Driver: the command identifier is sent as a plain slot number,
+	 * omitting the small generation counter this driver would otherwise
+	 * pack alongside it to detect stale completions.
 	 */
 	NVME_QUIRK_SKIP_CID_GEN = (1 << 17),
 
 	/*
 	 * Reports garbage in the namespace identifiers (eui64, nguid, uuid).
+	 *
+	 * Driver: the reported eui64, nguid and uuid identifiers are
+	 * discarded.  This bit is also raised on the fly when two namespaces
+	 * report the same non-zero identifier.
 	 */
 	NVME_QUIRK_BOGUS_NID = (1 << 18),
 
 	/*
 	 * No temperature thresholds for channels other than 0 (Composite).
+	 *
+	 * Driver: nothing to do -- temperature thresholds are never written
+	 * for any sensor.
 	 */
 	NVME_QUIRK_NO_SECONDARY_TEMP_THRESH = (1 << 19),
 
 	/*
 	 * Disables simple suspend/resume path.
+	 *
+	 * Driver: nothing to do -- this platform has no suspend or resume
+	 * path to turn off.
 	 */
 	NVME_QUIRK_FORCE_NO_SIMPLE_SUSPEND = (1 << 20),
 
 	/*
 	 * MSI (but not MSI-X) interrupts are broken and never fire.
+	 *
+	 * Driver: message-signalled interrupts are not enabled for such a
+	 * controller; legacy pin interrupts are used instead.
 	 */
 	NVME_QUIRK_BROKEN_MSI = (1 << 21),
 
 	/*
-	 * Align dma pool segment size to 512 bytes
+	 * Align dma pool segment size to 512 bytes.
+	 *
+	 * Driver: the buffers that hold short descriptor lists are aligned to
+	 * at least 512 bytes for such a controller.
 	 */
 	NVME_QUIRK_DMAPOOL_ALIGN_512 = (1 << 22),
 };
@@ -196,6 +275,8 @@ struct NVMeController
 	BYTE irq_signal; /* Signal bit raised by the ISR to drain completions. */
 	BYTE reset_signal; /* Signal bit requesting synchronous controller reset work. */
 	struct MsgPort *msgPort; /* Shared I/O request port for all block namespaces. */
+	struct MinList io_pending; /* I/O held for back-pressure when io_q is full; FIFO,
+	                            * drained by the unit task as completions free slots. */
 
 	struct Task *admin_task; /* AdminWorker handling blocking admin operations. */
 	BYTE scan_signal; /* Signal bit requesting namespace rescan work. */
@@ -206,7 +287,8 @@ struct NVMeController
 	APTR memoryPool; /* Shared pool backing pool_* and dma_* allocations. */
 	struct slab_cache req_slab; /* Slab cache for struct nvme_request objects. */
 	struct slab_cache ctx_slab; /* Slab cache for struct nvme_io_context objects. */
-	struct slab_cache prp_page_slab; /* Slab cache for 4 KiB PRP-list pages. */
+	struct slab_cache prp_large_slab; /* Slab cache for 4 KiB PRP-list pages (chained / >32-entry lists). */
+	struct slab_cache prp_small_slab; /* Slab cache for 256 B PRP-list pages (≤32-entry lists; the common case). */
 
 	/* Runtime queue state. */
 	struct nvme_queue admin_q; /* Admin submission and completion queue pair. */
@@ -248,6 +330,7 @@ struct NVMeController
 	u32 ctrl_config; /* Shadow copy of the programmed CC register value. */
 	u16 cntlid; /* Controller identifier from Identify Controller. */
 	u16 sqsize; /* Maximum I/O SQ size exposed to queue setup. */
+	u16 io_max_inflight; /* Max simultaneous in-flight I/O commands (>=1): io_q.depth-1, or 1 under NVME_QUIRK_QDEPTH_ONE. Cached by nvme_setup_io_queue; gates dispatch/back-pressure and caps chunk siblings. */
 	u32 max_transfer_bytes; /* Maximum payload size accepted for one I/O command. */
 	u32 max_hw_sectors; /* Hardware max transfer in 512-byte sectors. */
 	u32 max_zeroes_sectors; /* Hardware max write-zeroes transfer in sectors. */

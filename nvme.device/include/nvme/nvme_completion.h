@@ -60,16 +60,23 @@ enum nvme_req_flags
                                      * by the caller (e.g. DSM range
                                      * buffer in nvme_setup_dsm) and
                                      * must use dma_free. */
+    NVME_REQ_PRP_SMALL = (1 << 6),  /* slab pages came from prp_small_slab
+                                     * (256 B) rather than prp_large_slab
+                                     * (4 KiB).  A request's list is always
+                                     * all-small (a single ≤32-entry page) or
+                                     * all-large, never mixed, so this one bit
+                                     * selects the slab for every prp_pages[]
+                                     * entry in nvme_req_free_dma_buffers. */
 };
 
 /*
  * In-flight NVMe command descriptor.  One per outstanding SQ entry.
  * Pool-allocated from ctrl->memoryPool.
  *
- * tag is the per-queue CID (0..req->q->depth-1).  req->q->inflight[tag]
- * points back at this request until the CQE is drained.  Tag values
- * overlap between the admin and I/O queues — the queue pointer is the
- * disambiguator, not the tag.
+ * cid is the encoded command_id (gen<<12 | tag); its low 12 bits are the
+ * per-queue slot index (0..req->q->depth-1) and req->q->inflight[tag] points
+ * back at this request until the CQE is drained.  CIDs overlap between the
+ * admin and I/O queues — the queue pointer is the disambiguator.
  *
  * Admin commands: set io=NULL, waiter=FindTask(NULL),
  * wait_signal=AllocSignal(-1), then Wait(1UL<<wait_signal) after submit.
@@ -87,7 +94,8 @@ struct nvme_request
     /* Completion fields — written from CQE by nvme_process_completions() */
     union nvme_result result; /* CQE DW0                              */
     u16 status;               /* CQE status field (bits 14:1)         */
-    u16 tag;                  /* SQ slot index == cmd CID             */
+    u16 cid;                  /* encoded command_id = gen<<12 | tag;
+                               * slot index = cid & 0x0fff (nvme_req_tag) */
     u8 retries;
     enum nvme_req_flags flags;
 

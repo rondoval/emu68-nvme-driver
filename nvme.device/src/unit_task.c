@@ -10,6 +10,8 @@
 #endif
 
 #include <dos/dos.h>
+#include <exec/errors.h>
+#include <exec/io.h>
 #include <minlist.h>
 
 #include "device.h"
@@ -34,6 +36,58 @@ int nvme_reset_ctrl(struct NVMeController *ctrl)
 }
 
 /*
+ * nvme_drain_msgport - dispatch queued I/O under I/O-queue back-pressure.
+ *
+ * The I/O queue holds at most ctrl->io_max_inflight commands (one under
+ * NVME_QUIRK_QDEPTH_ONE); beyond that, nvme_alloc_cid would fail and the
+ * client would see IOERR_UNITBUSY.  Instead we serialize: I/O-queue commands
+ * that don't fit are stashed on ctrl->io_pending (FIFO) and resubmitted as
+ * completions free slots.  Called at the end of every unit-task loop pass —
+ * after completions are reaped — so a freed slot is immediately refilled.
+ *
+ * While quiesced/frozen nothing is dispatched; messages and stashed I/O wait
+ * in place until nvme_unquiesce_io_queues / nvme_unfreeze re-signal us.
+ */
+static void nvme_drain_msgport(struct NVMeController *ctrl)
+{
+    if (test_bit(NVME_CTRL_STOPPED, &ctrl->flags) ||
+        test_bit(NVME_CTRL_FROZEN, &ctrl->flags))
+        return;
+
+    struct List *pending = (struct List *)&ctrl->io_pending;
+
+    /* Batch the I/O-queue SQ-tail doorbell: every ProcessCommand below that
+     * reaches nvme_submit_io defers its doorbell, and the single _end commits
+     * once for the whole drain pass (one doorbell instead of one per command). */
+    nvme_sq_batch_begin(&ctrl->io_q);
+
+    /* 1. Resubmit stashed I/O first (FIFO) while the queue has room. */
+    while (ctrl->io_q.inflight_count < ctrl->io_max_inflight)
+    {
+        struct IOStdReq *io = (struct IOStdReq *)RemHead(pending);
+        if (!io)
+            break;
+        ProcessCommand(io);
+    }
+
+    /* 2. Drain newly arrived messages.  An I/O-queue command is stashed
+     * (FIFO) when the queue is full or earlier I/O is still waiting, so
+     * ordering is preserved; control commands always pass straight through. */
+    struct IOStdReq *io;
+    while ((io = (struct IOStdReq *)GetMsg(ctrl->msgPort)))
+    {
+        if (io->io_Command != CMD_INTERNAL_ABORT_REQUEST &&
+            (ctrl->io_q.inflight_count >= ctrl->io_max_inflight ||
+             !IsListEmpty(pending)))
+            AddTail(pending, (struct Node *)io);
+        else
+            ProcessCommand(io);
+    }
+
+    nvme_sq_batch_end(&ctrl->io_q);
+}
+
+/*
  * UnitTask - per-controller task body.
  *
  * Initialises ctrl->msgPort (the shared I/O port for all namespaces on
@@ -46,6 +100,8 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
 {
     /* Retry queue used by nvme_retry_req for CRDT-deferred resubmits */
     _NewMinList(&ctrl->retry_list);
+    /* Back-pressure FIFO for I/O the full I/O queue can't accept yet */
+    _NewMinList(&ctrl->io_pending);
     ctrl->msgPort = CreateMsgPort();
     if (!ctrl->msgPort)
     {
@@ -122,20 +178,6 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
             nvme_reset_controller(ctrl);
         }
 
-        if (sigset & (1UL << ctrl->msgPort->mp_SigBit))
-        {
-            /* Skip new I/O dispatch while quiesced or frozen — messages
-             * stay in the port; nvme_unquiesce_io_queues / nvme_unfreeze
-             * re-signal us so we drain them on resume. */
-            if (!test_bit(NVME_CTRL_STOPPED, &ctrl->flags) &&
-                !test_bit(NVME_CTRL_FROZEN, &ctrl->flags))
-            {
-                struct IOStdReq *io;
-                while ((io = (struct IOStdReq *)GetMsg(ctrl->msgPort)))
-                    ProcessCommand(io);
-            }
-        }
-
         if (sigset & (1UL << timerPort->mp_SigBit))
         {
             if (CheckIO(&timerReq->tr_node))
@@ -149,6 +191,13 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
             SendIO(&timerReq->tr_node);
         }
 
+        /* Dispatch queued I/O last — after completions are reaped — so a
+         * just-freed I/O-queue slot is refilled the same pass.  Handles
+         * new msgPort traffic and resubmits stashed (back-pressured) I/O.
+         * Skipped on the stopping pass: we're about to tear down. */
+        if (!(sigset & SIGBREAKF_CTRL_C))
+            nvme_drain_msgport(ctrl);
+
         if (sigset & SIGBREAKF_CTRL_C)
         {
             Kprintf("[nvme] %s: controller task stopping\n", __func__);
@@ -157,6 +206,19 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
         }
 
     } while ((sigset & SIGBREAKF_CTRL_C) == 0);
+
+    /* Fail any I/O still held for back-pressure: the task is exiting and the
+     * controller is being torn down, so reply rather than leak the requests.
+     * (Control commands never enter io_pending, so every node here is a
+     * client IOStdReq safe to ReplyMsg.) */
+    {
+        struct IOStdReq *pio;
+        while ((pio = (struct IOStdReq *)RemHead((struct List *)&ctrl->io_pending)))
+        {
+            pio->io_Error = IOERR_ABORTED;
+            ReplyMsg((struct Message *)pio);
+        }
+    }
 
     CloseDevice(&timerReq->tr_node);
 free_timer_handles:

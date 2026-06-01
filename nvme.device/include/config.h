@@ -23,6 +23,25 @@
 #define DEVICE_USE_MSI TRUE
 #endif
 
+/* NVMe interrupt coalescing (Set Features 0x08), disabled by default.
+ *
+ * TIME is the aggregation window in 100 µs units; THR is the completion
+ * threshold (the controller waits for THR+1 completions, or the window to
+ * elapse, before raising an interrupt).  Both 0 = feature not issued.
+ *
+ * Off by default to match Linux: coalescing trades completion latency for
+ * fewer interrupts, the single shared vector would also delay admin
+ * completions, and the driver already coalesces naturally by masking the
+ * IRQ for the whole CQ drain.  Set non-zero to experiment on a given device.
+ */
+#ifndef DEVICE_IRQ_COALESCE_TIME
+#define DEVICE_IRQ_COALESCE_TIME 0
+#endif
+
+#ifndef DEVICE_IRQ_COALESCE_THR
+#define DEVICE_IRQ_COALESCE_THR 0
+#endif
+
 #define STACK_SIZE              65535
 #define UNIT_TASK_PRIORITY      10
 #define UNIT_TASK_POLL_DELAY_MS 100

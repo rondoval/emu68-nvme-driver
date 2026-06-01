@@ -92,6 +92,7 @@ int nvme_set_features(struct NVMeController *dev, unsigned int fid,
  */
 int nvme_configure_timestamp(struct NVMeController *ctrl);
 int nvme_configure_host_options(struct NVMeController *ctrl);
+int nvme_configure_irq_coalesce(struct NVMeController *ctrl);
 
 /*
  * nvme_get_log - issue a Get Log Page command, synchronously or asynchronously.

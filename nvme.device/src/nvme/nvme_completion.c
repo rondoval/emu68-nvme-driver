@@ -244,8 +244,8 @@ static void nvme_end_req(struct nvme_request *req)
 {
 	BYTE error = nvme_error_status(req->status);
 
-	KprintfH("[nvme] end_req: req=%lx tag=%lu status=0x%lx (%s) error=%ld done=%lx waiter=%lx io=%lx\n",
-			 (ULONG)req, (ULONG)req->tag, (ULONG)req->status,
+	KprintfH("[nvme] end_req: req=%lx cid=0x%lx status=0x%lx (%s) error=%ld done=%lx waiter=%lx io=%lx\n",
+			 (ULONG)req, (ULONG)req->cid, (ULONG)req->status,
 			 nvme_get_error_status_str(req->status),
 			 (LONG)error, (ULONG)req->done,
 			 (ULONG)req->waiter, (ULONG)req->io);
@@ -294,8 +294,8 @@ static void nvme_end_req(struct nvme_request *req)
  */
 void nvme_complete_rq(struct nvme_request *req)
 {
-	KprintfH("[nvme] complete_rq: req=%lx tag=%lu opcode=0x%02lx (%s) status=0x%lx (%s) unit=%lx ctx=%lx\n",
-			 (ULONG)req, (ULONG)req->tag,
+	KprintfH("[nvme] complete_rq: req=%lx cid=0x%lx opcode=0x%02lx (%s) status=0x%lx (%s) unit=%lx ctx=%lx\n",
+			 (ULONG)req, (ULONG)req->cid,
 			 (ULONG)req->cmd.common.opcode,
 			 req->unit ? nvme_get_opcode_str(req->cmd.common.opcode)
 					   : nvme_get_admin_opcode_str(req->cmd.common.opcode),

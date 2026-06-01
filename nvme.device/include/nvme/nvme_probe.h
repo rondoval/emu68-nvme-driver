@@ -48,6 +48,6 @@ void nvme_reset_controller(struct NVMeController *ctrl);
  * namespace geometry.
  */
 struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl, u32 nsid,
-		ULONG blockSize, u8 blockShift, u64 logicalSectors);
+		ULONG blockSize, u8 blockShift, u64 logicalSectors, ULONG features);
 
 #endif /* NVME_PROBE_H */

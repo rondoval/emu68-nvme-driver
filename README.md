@@ -101,18 +101,21 @@ For RDB-based automount and autoboot handling, the driver uses the
 
 - `CMD_READ`, `CMD_WRITE`, `TD_READ64`, `TD_WRITE64`, and newstyle 64-bit read/write commands
 - `TD_FORMAT` and `TD_FORMAT64` compatibility through the normal write path
+- native `NSCMD_NVME_WRITE_ZEROES` support for controller-backed zero-fill requests
+- native `NSCMD_NVME_TRIM` support for explicit logical-block deallocate requests
 - flush / cache synchronization
-- discard / trim support through `HD_SCSICMD` SCSI UNMAP translation to NVMe Dataset Management
+- discard / trim support through both `NSCMD_NVME_TRIM` and `HD_SCSICMD` SCSI UNMAP translation to NVMe Dataset Management
 - PRP-based data transfer handling, including multi-page transfers
 - internal bounce-buffer staging when the caller's buffer is not directly DMA-safe
 
-The current block path does not expose a distinct AmigaOS primitive for NVMe Write Zeroes. A
-zero-fill request such as `TD_FORMAT` is implemented as a normal NVMe write using a zeroed bounce
-buffer, not as the NVMe Write Zeroes opcode.
 
-Similarly, discard is not exposed as a native trackdisk-style command. It is currently available
-through the SCSI emulation path only: a client issues SCSI UNMAP via `HD_SCSICMD`, and the driver
-translates that into NVMe Dataset Management / Deallocate.
+Similarly, discard is not exposed as a standard trackdisk command. Native callers may use the
+private `NSCMD_NVME_TRIM` command from `devices/nvme.h`, where `io_Data` points to an array of
+`struct NVMeTrimRange` entries expressed in logical blocks of the unit's sector size. Callers that
+start from byte ranges should first query `TD_GETGEOMETRY.dg_SectorSize` and convert bytes to LBAs
+and block counts. The current native trim ABI accepts up to 256 ranges per request. Generic
+storage clients can also use the SCSI emulation path: issue SCSI UNMAP via `HD_SCSICMD`, and the
+driver translates that into NVMe Dataset Management / Deallocate.
 
 ### Controller and media diagnostics
 

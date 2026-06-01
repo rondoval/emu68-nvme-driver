@@ -142,8 +142,12 @@ static void nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
 	ns->pic = info->pic;
 	ns->elbaf = info->elbaf;
 	ns->lbstm = info->lbstm;
-	if (info->deac)
-		ns->features |= NVME_NS_DEAC;
+	if (ns->unit)
+	{
+		ns->unit->features &= ~(ULONG)NVME_NS_DEAC;
+		if (info->deac)
+			ns->unit->features |= NVME_NS_DEAC;
+	}
 
 	if (info->ms == 0 && info->pi_type == 0 &&
 		ns->lba_shift >= 9 && ns->lba_shift <= 12)
@@ -200,7 +204,8 @@ static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info
 	ns->unit = nvme_alloc_nvmeunit(ctrl, ns->ns_id,
 								   1u << ns->lba_shift,
 								   ns->lba_shift,
-								   ns->disk_capacity_sectors);
+								   ns->disk_capacity_sectors,
+								   info->deac ? NVME_NS_DEAC : 0);
 
 	AddTail((struct List *)&ctrl->namespaces, (struct Node *)&ns->mn_Node);
 }

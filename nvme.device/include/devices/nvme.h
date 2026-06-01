@@ -15,10 +15,43 @@
 #include <exec/types.h>
 #include <devices/newstyle.h>
 
-/* NSCMD numbers in the gap between NSCMD_TD_* (0xC003) and the device's
- * private NSCMD_ETD_* range (0xE000). */
-#define NSCMD_NVME_ADMIN_PASS  0xD000   /* submit on the admin queue */
-#define NSCMD_NVME_IO_PASS     0xD001   /* submit on the I/O queue (not yet supported) */
+/* Private 3rd-party commands must stay out of NSD's reserved ranges.
+ * Keep these in the legal 0x8000-0xBFFF command space.
+ *
+ * NSCMD_NVME_TRIM uses an explicit logical-block range list
+ * (struct NVMeTrimRange below). Callers that start from byte ranges should
+ * query TD_GETGEOMETRY first and use dg_SectorSize to convert bytes to LBAs
+ * and block counts. The current native TRIM interface accepts at most 256
+ * ranges per request.
+ *
+ * NSCMD_NVME_WRITE_ZEROES is different: it follows the 64-bit trackdisk-style
+ * offset/length contract, using io_Offset plus the high 32 bits in io_Actual
+ * on entry, and io_Length as the byte count. It does not consume io_Data. */
+#define NSCMD_NVME_ADMIN_PASS  0x8020   /* submit on the admin queue */
+#define NSCMD_NVME_IO_PASS     0x8021   /* submit on the I/O queue (not yet supported) */
+#define NSCMD_NVME_TRIM        0x8022   /* deallocate ranges: io_Data = NVMeTrimRange[], io_Length = nr*sizeof */
+#define NSCMD_NVME_WRITE_ZEROES 0x8023  /* zero a single range: 64-bit byte offset in io_Offset/io_Actual, byte count in io_Length, no io_Data */
+
+/*
+ * struct NVMeTrimRange - one range for NSCMD_NVME_TRIM (NVMe DSM Deallocate).
+ *
+ * The LBA is split hi/lo to stay 32-bit-clean. io_Data points to an array of
+ * these. io_Length must be nr * sizeof(struct NVMeTrimRange), with
+ * 1 <= nr <= 256.
+ *
+ * ntr_SectorHi/ntr_SectorLo name the starting logical block address.
+ * ntr_Count is the number of logical blocks to deallocate.
+ *
+ * These are block units, not bytes. Callers that start from byte ranges
+ * should issue TD_GETGEOMETRY first and use dg_SectorSize to convert byte
+ * offsets/lengths into LBAs and block counts.
+ */
+struct NVMeTrimRange
+{
+    ULONG ntr_SectorHi; /* high 32 bits of the starting LBA */
+    ULONG ntr_SectorLo; /* low 32 bits of the starting LBA  */
+    ULONG ntr_Count;    /* number of logical blocks to deallocate */
+};
 
 /*
  * struct NVMePassthruCmd - userland-supplied passthrough command.
