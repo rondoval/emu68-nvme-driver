@@ -344,7 +344,7 @@ static void nvme_cache_id_strings(struct NVMeController *ctrl,
 }
 
 /* default controller shutdown timeout (seconds) */
-static unsigned char shutdown_timeout = 5;
+#define NVME_DEFAULT_SHUTDOWN_TIMEOUT 5U
 
 /*
  * nvme_init_identify - populate controller capabilities from Identify Controller
@@ -423,18 +423,18 @@ int nvme_init_identify(struct NVMeController *ctrl)
 	if (id->rtd3e) {
 		/* us -> s */
 		u32 transition_time = le32(id->rtd3e) / USEC_PER_SEC;
-		if (transition_time < shutdown_timeout)
-			transition_time = shutdown_timeout;
+		if (transition_time < NVME_DEFAULT_SHUTDOWN_TIMEOUT)
+			transition_time = NVME_DEFAULT_SHUTDOWN_TIMEOUT;
 		if (transition_time > 60U)
 			transition_time = 60U;
 
 		ctrl->shutdown_timeout = transition_time;
 
-		if (ctrl->shutdown_timeout != shutdown_timeout)
+		if (ctrl->shutdown_timeout != NVME_DEFAULT_SHUTDOWN_TIMEOUT)
 			Kprintf("[nvme] %s: D3 entry latency set to %lu seconds\n",
 					__func__, ctrl->shutdown_timeout);
 	} else
-		ctrl->shutdown_timeout = shutdown_timeout;
+		ctrl->shutdown_timeout = NVME_DEFAULT_SHUTDOWN_TIMEOUT;
 
 	ctrl->hmpre = le32(id->hmpre);
 	ctrl->hmmin = le32(id->hmmin);

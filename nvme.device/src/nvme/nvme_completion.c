@@ -20,7 +20,8 @@
                                    * nvme_io_context_pump, nvme_io_context_finish */
 #include <nvme/nvme_completion.h>
 
-static const u8 nvme_max_retries = 5; // max number of retries a command may have
+/* max number of retries a command may have */
+#define NVME_MAX_RETRIES 5U
 
 /*
  * nvme_error_status - map an NVMe completion status code to a amigaos error code
@@ -155,7 +156,7 @@ static inline enum nvme_disposition nvme_decide_disposition(struct nvme_request 
 
 	if (nvme_req_noretry(req) ||
 		(req->status & NVME_STATUS_DNR) ||
-		req->retries >= nvme_max_retries)
+		req->retries >= NVME_MAX_RETRIES)
 		return COMPLETE;
 
 	/* Non-transient generic errors: the controller rejected the
