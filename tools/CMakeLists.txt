@@ -25,11 +25,22 @@ add_executable(nvmeinfo
 add_executable(nvmeadm
     nvmeadm.c
     nvmeadm_core.c
-    nvmeadm_commands.c
+    nvmeadm_util.c
+    nvmeadm_identify.c
+    nvmeadm_smart.c
+    nvmeadm_logs.c
+    nvmeadm_selftest.c
+    nvmeadm_firmware.c
+    nvmeadm_maint.c
+    nvmeadm_features.c
 )
 
 target_compile_options(nvmeinfo PRIVATE ${NVME_TOOL_COMPILE_OPTIONS})
 target_compile_options(nvmeadm PRIVATE ${NVME_TOOL_COMPILE_OPTIONS})
+
+target_compile_definitions(nvmeadm PRIVATE
+    VERSTAG="$VER: nvmeadm ${PROJECT_VERSION} ${CURRENT_DATE}"
+)
 
 target_link_options(nvmeinfo PRIVATE ${NVME_TOOL_LINK_OPTIONS})
 target_link_options(nvmeadm PRIVATE ${NVME_TOOL_LINK_OPTIONS})

@@ -43,7 +43,6 @@ static void format_le_decimal(const UBYTE *value, ULONG value_len,
     char digits[40];
     ULONG digit_count = 0;
     ULONG out_pos = 0;
-    LONG i;
 
     if (!out || out_len == 0)
         return;
@@ -75,7 +74,7 @@ static void format_le_decimal(const UBYTE *value, ULONG value_len,
     {
         ULONG carry = 0;
 
-        for (i = (LONG)value_len - 1; i >= 0; i--)
+        for (LONG i = (LONG)value_len - 1; i >= 0; i--)
         {
             ULONG cur = (carry << 8) | (ULONG)tmp[i];
             tmp[i] = (UBYTE)(cur / 10UL);
@@ -113,18 +112,17 @@ void format_u64_decimal(unsigned long long value, char *out, ULONG out_len)
 static void mul_u128_small(const UBYTE *value, ULONG multiplier,
                            UBYTE *out, ULONG out_len)
 {
-    ULONG i;
     ULONG carry = 0;
 
     mem_zero(out, out_len);
-    for (i = 0; i < 16 && i < out_len; i++)
+    for (ULONG i = 0; i < 16 && i < out_len; i++)
     {
         ULONG product = ((ULONG)value[i] * multiplier) + carry;
         out[i] = (UBYTE)(product & 0xffUL);
         carry = product >> 8;
     }
 
-    for (i = 16; i < out_len && carry != 0; i++)
+    for (ULONG i = 16; i < out_len && carry != 0; i++)
     {
         out[i] = (UBYTE)(carry & 0xffUL);
         carry >>= 8;
@@ -133,9 +131,7 @@ static void mul_u128_small(const UBYTE *value, ULONG multiplier,
 
 static BOOL le_bytes_ge_u16(const UBYTE *value, ULONG value_len, UWORD threshold)
 {
-    ULONG i;
-
-    for (i = value_len; i-- > 2; )
+    for (ULONG i = value_len; i-- > 2; )
     {
         if (value[i] != 0)
             return TRUE;
@@ -147,9 +143,8 @@ static BOOL le_bytes_ge_u16(const UBYTE *value, ULONG value_len, UWORD threshold
 static UWORD le_bytes_divide_u16(UBYTE *value, ULONG value_len, UWORD divisor)
 {
     ULONG remainder = 0;
-    LONG i;
 
-    for (i = (LONG)value_len - 1; i >= 0; i--)
+    for (LONG i = (LONG)value_len - 1; i >= 0; i--)
     {
         ULONG cur = (remainder << 8) | (ULONG)value[i];
         value[i] = (UBYTE)(cur / divisor);
@@ -159,7 +154,9 @@ static UWORD le_bytes_divide_u16(UBYTE *value, ULONG value_len, UWORD divisor)
     return (UWORD)remainder;
 }
 
-void print_smart_data_amount(CONST_STRPTR label, const UBYTE *value)
+/* Scale a little-endian byte count to B/KiB/.../TiB and print it with one
+ * decimal of precision.  The value buffer is consumed by the division. */
+static void print_le_bytes_scaled(CONST_STRPTR label, UBYTE *bytes, ULONG len)
 {
     static const CONST_STRPTR units[] = {
         (CONST_STRPTR)"B",
@@ -168,19 +165,17 @@ void print_smart_data_amount(CONST_STRPTR label, const UBYTE *value)
         (CONST_STRPTR)"GiB",
         (CONST_STRPTR)"TiB",
     };
-    UBYTE scaled[24];
     char integer_text[40];
     UWORD remainder = 0;
     ULONG unit_index = 0;
 
-    mul_u128_small(value, 512000UL, scaled, sizeof(scaled));
-    while (unit_index < 4 && le_bytes_ge_u16(scaled, sizeof(scaled), 1024))
+    while (unit_index < 4 && le_bytes_ge_u16(bytes, len, 1024))
     {
-        remainder = le_bytes_divide_u16(scaled, sizeof(scaled), 1024);
+        remainder = le_bytes_divide_u16(bytes, len, 1024);
         unit_index++;
     }
 
-    format_le_decimal(scaled, sizeof(scaled), integer_text, sizeof(integer_text));
+    format_le_decimal(bytes, len, integer_text, sizeof(integer_text));
     if (unit_index == 0 || remainder == 0)
     {
         Printf((CONST_STRPTR)"%-24s %s %s\n",
@@ -193,6 +188,23 @@ void print_smart_data_amount(CONST_STRPTR label, const UBYTE *value)
         Printf((CONST_STRPTR)"%-24s %s.%lu %s\n",
                (ULONG)label, (ULONG)integer_text, tenths, (ULONG)units[unit_index]);
     }
+}
+
+void print_smart_data_amount(CONST_STRPTR label, const UBYTE *value)
+{
+    UBYTE scaled[24];
+
+    mul_u128_small(value, 512000UL, scaled, sizeof(scaled));
+    print_le_bytes_scaled(label, scaled, sizeof(scaled));
+}
+
+void print_binary_size(CONST_STRPTR label, unsigned long long bytes)
+{
+    UBYTE le_bytes[8];
+
+    for (ULONG i = 0; i < 8; i++)
+        le_bytes[i] = (UBYTE)((bytes >> (i * 8)) & 0xffULL);
+    print_le_bytes_scaled(label, le_bytes, sizeof(le_bytes));
 }
 
 CONST_STRPTR nvme_status_type_name(UWORD sct)
@@ -219,10 +231,31 @@ static ULONG nvme_bytes_to_numd(ULONG bytes)
     return (bytes >> 2) - 1UL;
 }
 
-BOOL nvmeadm_open(struct nvmeadm_session *session)
+static BOOL nvmeadm_fetch_unit_info(struct nvmeadm_session *session)
 {
-    BYTE open_err;
+    struct IOStdReq *req = (struct IOStdReq *)session->io;
 
+    req->io_Command = NSCMD_NVME_UNIT_INFO;
+    req->io_Data = &session->info;
+    req->io_Length = sizeof(session->info);
+    DoIO(session->io);
+
+    if (req->io_Error != 0)
+    {
+        Printf((CONST_STRPTR)"nvme.device lacks the unit-info query; update the driver\n");
+        return FALSE;
+    }
+
+    return TRUE;
+}
+
+/* On failure nothing is left behind: partial port/IORequest state is
+ * released here, so callers never call nvmeadm_close() for a failed open.
+ * The quiet variant suppresses the OpenDevice failure message so unit scans
+ * can probe past the last unit. */
+static BOOL nvmeadm_open_unit_internal(struct nvmeadm_session *session,
+                                       ULONG unit, BOOL quiet)
+{
     mem_zero(session, sizeof(*session));
 
     session->port = CreateMsgPort();
@@ -232,18 +265,39 @@ BOOL nvmeadm_open(struct nvmeadm_session *session)
     session->io = (struct IORequest *)CreateIORequest(session->port,
                                                       sizeof(struct IOStdReq));
     if (!session->io)
+    {
+        nvmeadm_close(session);
         return FALSE;
+    }
 
-    open_err = OpenDevice((CONST_STRPTR)"nvme.device", 0, session->io, 0);
+    BYTE open_err = OpenDevice((CONST_STRPTR)"nvme.device", unit, session->io, 0);
     if (open_err != 0)
     {
-        Printf((CONST_STRPTR)"OpenDevice(nvme.device) failed: %ld\n",
-               (LONG)(UBYTE)open_err);
+        if (!quiet)
+            Printf((CONST_STRPTR)"OpenDevice(nvme.device,%lu) failed: %ld\n",
+                   unit, (LONG)(UBYTE)open_err);
+        nvmeadm_close(session);
         return FALSE;
     }
 
     session->device_open = TRUE;
+    if (!nvmeadm_fetch_unit_info(session))
+    {
+        nvmeadm_close(session);
+        return FALSE;
+    }
+
     return TRUE;
+}
+
+BOOL nvmeadm_open_unit_quiet(struct nvmeadm_session *session, ULONG unit)
+{
+    return nvmeadm_open_unit_internal(session, unit, TRUE);
+}
+
+BOOL nvmeadm_open_unit(struct nvmeadm_session *session, ULONG unit)
+{
+    return nvmeadm_open_unit_internal(session, unit, FALSE);
 }
 
 void nvmeadm_close(struct nvmeadm_session *session)
@@ -277,6 +331,37 @@ void print_admin_failure(CONST_STRPTR operation, BYTE status,
 {
     Printf((CONST_STRPTR)"%s failed: status=0x%02lx result=0x%08lx actual=%lu\n",
            (ULONG)operation, (ULONG)(UBYTE)status, result, actual);
+}
+
+BOOL nvmeadm_submit(struct nvmeadm_session *session,
+                    struct NVMePassthruCmd *cmd,
+                    CONST_STRPTR operation, ULONG *result_out)
+{
+    ULONG actual = 0;
+    BYTE status = nvmeadm_admin_passthru(session, cmd, &actual);
+
+    if (status != 0)
+    {
+        print_admin_failure(operation, status, cmd->pt_Result, actual);
+        return FALSE;
+    }
+
+    if (result_out)
+        *result_out = cmd->pt_Result;
+    return TRUE;
+}
+
+/* For best-effort probes of optional features: no failure message, the
+ * caller turns a miss into its own "not supported" output. */
+BOOL nvmeadm_submit_quiet(struct nvmeadm_session *session,
+                          struct NVMePassthruCmd *cmd, ULONG *result_out)
+{
+    if (nvmeadm_admin_passthru(session, cmd, NULL) != 0)
+        return FALSE;
+
+    if (result_out)
+        *result_out = cmd->pt_Result;
+    return TRUE;
 }
 
 APTR nvmeadm_alloc_clear(ULONG size)
@@ -340,10 +425,9 @@ BOOL nvmeadm_fetch_get_log(struct nvmeadm_session *session,
 {
     struct NVMePassthruCmd cmd;
     ULONG actual = 0;
-    BYTE status;
 
     nvmeadm_build_get_log(&cmd, nsid, log_page, lsp, csi, buffer, size);
-    status = nvmeadm_admin_passthru(session, &cmd, &actual);
+    BYTE status = nvmeadm_admin_passthru(session, &cmd, &actual);
     if (status != 0)
     {
         print_admin_failure(operation, status, cmd.pt_Result, actual);
@@ -359,10 +443,9 @@ BOOL nvmeadm_fetch_identify(struct nvmeadm_session *session,
 {
     struct NVMePassthruCmd cmd;
     ULONG actual = 0;
-    BYTE status;
 
     nvmeadm_build_identify(&cmd, nsid, cns, buffer, size);
-    status = nvmeadm_admin_passthru(session, &cmd, &actual);
+    BYTE status = nvmeadm_admin_passthru(session, &cmd, &actual);
     if (status != 0)
     {
         print_admin_failure(operation, status, cmd.pt_Result, actual);
@@ -372,6 +455,16 @@ BOOL nvmeadm_fetch_identify(struct nvmeadm_session *session,
     return TRUE;
 }
 
+BOOL nvmeadm_fetch_identify_quiet(struct nvmeadm_session *session,
+                                  ULONG nsid, ULONG cns,
+                                  APTR buffer, ULONG size)
+{
+    struct NVMePassthruCmd cmd;
+
+    nvmeadm_build_identify(&cmd, nsid, cns, buffer, size);
+    return nvmeadm_submit_quiet(session, &cmd, NULL);
+}
+
 BOOL nvmeadm_fetch_identify_csi(struct nvmeadm_session *session,
                                 ULONG nsid, UBYTE cns, UBYTE csi,
                                 APTR buffer, ULONG size,
@@ -379,10 +472,9 @@ BOOL nvmeadm_fetch_identify_csi(struct nvmeadm_session *session,
 {
     struct NVMePassthruCmd cmd;
     ULONG actual = 0;
-    BYTE status;
 
     nvmeadm_build_identify_csi(&cmd, nsid, cns, csi, buffer, size);
-    status = nvmeadm_admin_passthru(session, &cmd, &actual);
+    BYTE status = nvmeadm_admin_passthru(session, &cmd, &actual);
 
     if (status_out)
         *status_out = status;
@@ -411,4 +503,45 @@ void nvmeadm_build_self_test(struct NVMePassthruCmd *cmd, ULONG nsid,
     cmd->pt_Opcode = nvme_admin_dev_self_test;
     cmd->pt_Nsid = nsid;
     cmd->pt_Cdw10 = (ULONG)stc;
+}
+
+void nvmeadm_build_download_fw(struct NVMePassthruCmd *cmd, APTR buffer,
+                               ULONG size, ULONG offset_bytes)
+{
+    mem_zero(cmd, sizeof(*cmd));
+    cmd->pt_Opcode = nvme_admin_download_fw;
+    cmd->pt_Addr = buffer;
+    cmd->pt_DataLen = size;
+    cmd->pt_Cdw10 = nvme_bytes_to_numd(size);
+    cmd->pt_Cdw11 = offset_bytes >> 2;
+}
+
+void nvmeadm_build_format_nvm(struct NVMePassthruCmd *cmd, ULONG nsid,
+                              UBYTE lbaf, UBYTE ses)
+{
+    mem_zero(cmd, sizeof(*cmd));
+    cmd->pt_Opcode = nvme_admin_format_nvm;
+    cmd->pt_Nsid = nsid;
+    cmd->pt_Cdw10 = (ULONG)lbaf | ((ULONG)ses << 9);
+}
+
+void nvmeadm_build_sanitize_nvm(struct NVMePassthruCmd *cmd, UBYTE sanact,
+                                BOOL ause, UBYTE owpass,
+                                BOOL oipbp, BOOL nodas)
+{
+    mem_zero(cmd, sizeof(*cmd));
+    cmd->pt_Opcode = nvme_admin_sanitize_nvm;
+    cmd->pt_Cdw10 = (ULONG)(sanact & 0x7U) |
+                    ((ULONG)(ause ? 1U : 0U) << 3) |
+                    ((ULONG)(owpass & 0x0fU) << 4) |
+                    ((ULONG)(oipbp ? 1U : 0U) << 8) |
+                    ((ULONG)(nodas ? 1U : 0U) << 9);
+}
+
+void nvmeadm_build_activate_fw(struct NVMePassthruCmd *cmd, UBYTE slot,
+                               UBYTE action)
+{
+    mem_zero(cmd, sizeof(*cmd));
+    cmd->pt_Opcode = nvme_admin_activate_fw;
+    cmd->pt_Cdw10 = (ULONG)slot | (ULONG)action;
 }

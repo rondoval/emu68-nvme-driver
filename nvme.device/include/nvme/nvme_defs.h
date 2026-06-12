@@ -677,6 +677,42 @@ struct nvme_effects_log {
 	u8   resv[2048];
 };
 
+/* Identify Controller SANICAP bits */
+enum {
+	NVME_SANICAP_CES	= 1 << 0,	/* Crypto Erase supported */
+	NVME_SANICAP_BES	= 1 << 1,	/* Block Erase supported */
+	NVME_SANICAP_OWS	= 1 << 2,	/* Overwrite supported */
+	NVME_SANICAP_NDI	= 1 << 29,	/* No-Deallocate Inhibited */
+	NVME_SANICAP_NODMMAS_MASK	= 3U << 30,	/* No-Deallocate Modifies Media After Sanitize */
+	NVME_SANICAP_NODMMAS_SHIFT	= 30,
+};
+
+struct nvme_sanitize_log_page {
+	__le16		sprog;		/* sanitize progress, fraction of 65536 */
+	__le16		sstat;		/* sanitize status */
+	__le32		scdw10;		/* CDW10 of the most recent Sanitize command */
+	__le32		eto;		/* estimated time for overwrite, seconds */
+	__le32		etbe;		/* estimated time for block erase, seconds */
+	__le32		etce;		/* estimated time for crypto erase, seconds */
+	__le32		etond;		/* estimated time for overwrite, no-deallocate */
+	__le32		etbend;		/* estimated time for block erase, no-deallocate */
+	__le32		etcend;		/* estimated time for crypto erase, no-deallocate */
+	u8		rsvd32[480];
+};
+
+/* Sanitize Status log SSTAT field */
+enum {
+	NVME_SSTAT_STATUS_MASK		= 0x7,
+	NVME_SSTAT_NEVER_SANITIZED	= 0x0,
+	NVME_SSTAT_COMPLETE_SUCCESS	= 0x1,
+	NVME_SSTAT_IN_PROGRESS		= 0x2,
+	NVME_SSTAT_COMPLETED_FAILED	= 0x3,
+	NVME_SSTAT_COMPLETE_SUCCESS_NO_DEALLOC = 0x4,
+	NVME_SSTAT_OWPASS_MASK		= 0x1f << 3,	/* overwrite passes completed */
+	NVME_SSTAT_OWPASS_SHIFT		= 3,
+	NVME_SSTAT_GDE			= 1 << 8,	/* global data erased */
+};
+
 enum nvme_ana_state {
 	NVME_ANA_OPTIMIZED		= 0x01,
 	NVME_ANA_NONOPTIMIZED		= 0x02,
@@ -1215,6 +1251,7 @@ enum {
 	NVME_LOG_RMI		= 0x16,
 	NVME_LOG_DISC		= 0x70,
 	NVME_LOG_RESERVATION	= 0x80,
+	NVME_LOG_SANITIZE	= 0x81,
 	NVME_FWACT_REPL		= (0 << 3),
 	NVME_FWACT_REPL_ACTV	= (1 << 3),
 	NVME_FWACT_ACTV		= (2 << 3),
