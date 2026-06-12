@@ -140,7 +140,10 @@ static void nvme_stage_admin_prps(struct nvme_request *req,
         req->cmd.common.dptr.prp2 = le64(prp2_addr);
     }
 
-    nvme_cache_flush(buffer, buflen);
+    /* Admin buffers are bidirectional (e.g. Identify writes, Set Features reads);
+     * clean+invalidate is safe either way.  The caller invalidates after Wait()
+     * for device-write commands. */
+    nvme_cache_flush(buffer, buflen, FALSE);
 }
 
 /* ---------------------------------------------------------------- *

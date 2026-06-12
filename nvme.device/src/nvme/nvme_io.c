@@ -139,7 +139,7 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
                  * lists, which are always large (4 KiB) pages. */
                 u64 *prev = (u64 *)req->prp_pages[req->prp_page_count - 2];
                 prev[NVME_PRP_ENTRIES_PER_PAGE - 1] = le64((u64)(ULONG)list);
-                nvme_cache_flush(prev, NVME_CTRL_PAGE_SIZE);
+                nvme_cache_flush(prev, NVME_CTRL_PAGE_SIZE, TRUE); /* device reads PRP list */
             }
         }
 
@@ -153,7 +153,7 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
     /* Final (possibly only) list page: nothing chains off it, so
      * flush here.  Flush exactly list_bytes — a small page is only 256 B. */
     if (list)
-        nvme_cache_flush(list, list_bytes);
+        nvme_cache_flush(list, list_bytes, TRUE); /* device reads PRP list */
 
     req->flags |= NVME_REQ_PRP_LIST | NVME_REQ_PRP_SLAB;
     if (small)
@@ -199,7 +199,7 @@ static int nvme_setup_dsm(struct nvme_request *req, struct nvme_dsm_range *range
     }
 
     /* Device DMA-reads the range list; flush dirty CPU lines. */
-    nvme_cache_flush(ranges, sizeof(*ranges) * NVME_DSM_MAX_RANGES);
+    nvme_cache_flush(ranges, sizeof(*ranges) * NVME_DSM_MAX_RANGES, TRUE);
 
     mem_zero(&req->cmd, sizeof(req->cmd));
     req->cmd.dsm.opcode = nvme_cmd_dsm;
@@ -348,12 +348,15 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
         return IOERR_SELFTEST;
     }
 
-    /* Make the DMA buffer coherent with the device.  CachePreDMA
-     * writes back dirty lines for writes and pre-invalidates for
-     * reads so the device's writes won't be shadowed by stale cache.
-     * The matching post-DMA invalidate runs from nvme_cleanup_cmd. */
-    if (dma_buf && bytes)
-        nvme_cache_flush(dma_buf, bytes);
+    /* Make the DMA buffer coherent with the device (CachePreDMA cleans dirty
+     * lines so writes reach RAM and invalidates so reads aren't shadowed; the
+     * matching post-DMA invalidate for reads runs from nvme_cleanup_cmd).
+     *
+     * Skip when the parent context already cache-prepared the whole user
+     * buffer once — see nvme_io_submit_rw. */
+    if (dma_buf && bytes &&
+        !(req->ctx && req->ctx->data_precached && req->bounce_buf == NULL))
+        nvme_cache_flush(dma_buf, bytes, opcode == nvme_cmd_write); /* write: device reads data */
 
     return 0;
 }
@@ -434,10 +437,18 @@ void nvme_cleanup_cmd(struct nvme_request *req)
     if (req->cmd.rw.opcode == nvme_cmd_read &&
         req->user_buf && req->user_len)
     {
-        APTR dma_buf = req->bounce_buf ? req->bounce_buf : req->user_buf;
-        nvme_cache_inval(dma_buf, req->user_len);
         if (req->bounce_buf)
+        {
+            nvme_cache_inval(req->bounce_buf, req->user_len);
             CopyMem(req->bounce_buf, req->user_buf, req->user_len);
+        }
+        else if (!(req->ctx && req->ctx->data_precached))
+        {
+            /* Non-bounced, non-precached chunk: invalidate this slice now.
+             * Precached chunks are invalidated once over the whole buffer in
+             * nvme_io_context_finish. */
+            nvme_cache_inval(req->user_buf, req->user_len);
+        }
     }
 
     nvme_req_free_dma_buffers(req);
@@ -589,7 +600,7 @@ BYTE nvme_submit_io(struct nvme_request *req)
 
     /* Cache flush: device DMA-reads this SQE from DRAM.  Without
      * CachePreDMA the device may see stale cache lines and read garbage. */
-    nvme_cache_flush(slot, sizeof(struct nvme_command));
+    nvme_cache_flush(slot, sizeof(struct nvme_command), TRUE);
 
     q->sq_tail = next;
 
@@ -822,6 +833,12 @@ void nvme_io_context_finish(struct nvme_io_context *ctx)
     struct IOStdReq *io = ctx->io;
     BYTE err = ctx->first_error;
 
+    /* Whole-buffer post-DMA invalidate for a precached read — the per-chunk
+     * cleanup skipped it (nvme_cleanup_cmd).  All siblings have completed
+     * (inflight == 0), so the device is done writing the buffer. */
+    if (ctx->data_precached && ctx->opcode == nvme_cmd_read)
+        nvme_cache_inval(ctx->user_data, ctx->total_bytes);
+
     io->io_Error = err;
     io->io_Actual = err ? 0 : ctx->total_bytes;
 
@@ -927,8 +944,18 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
     ctx->opcode = opcode;
     ctx->user_data = buffer;
 
-    KprintfH("[nvme] io_submit_rw: ctx=%lx io_Length=%lu chunk_cap=%lu — multi-chunk\n",
-             (ULONG)ctx, bytes, (ULONG)cap);
+    /* When the whole transfer is directly DMA-able, cache-prepare the entire
+     * contiguous user buffer in ONE call here instead of once per 128 KB chunk.
+     * Siblings then skip their per-chunk data flush, and the post-DMA invalidate
+     * is done once in nvme_io_context_finish. */
+    if (!nvme_needs_bounce(buffer))
+    {
+        nvme_cache_flush(buffer, (ULONG)bytes, opcode == nvme_cmd_write);
+        ctx->data_precached = 1;
+    }
+
+    KprintfH("[nvme] io_submit_rw: ctx=%lx io_Length=%lu chunk_cap=%lu precached=%lu — multi-chunk\n",
+             (ULONG)ctx, bytes, (ULONG)cap, (ULONG)ctx->data_precached);
 
     BYTE err = nvme_io_context_pump(ctx);
     if (err != NVME_IO_ASYNC)

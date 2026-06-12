@@ -32,6 +32,10 @@ struct nvme_io_context
     u16 inflight;          /* siblings still without CQE   */
     BYTE first_error;      /* AmigaOS error from first failed sibling */
     u8 opcode;             /* nvme_cmd_read or nvme_cmd_write */
+    u8 data_precached;     /* whole user buffer was cache-prepared once in
+                            * nvme_io_submit_rw (direct, non-bounced transfer),
+                            * so siblings skip the per-chunk data flush and the
+                            * post-DMA invalidate is done once in _finish. */
     APTR user_data;        /* == io->io_Data, base for chunk slicing */
 };
 

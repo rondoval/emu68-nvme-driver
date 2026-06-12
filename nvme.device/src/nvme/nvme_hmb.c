@@ -220,9 +220,9 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
         return -1;
     }
 
-    /* Device DMA-reads the descriptor table; flush dirty cache lines
+    /* Device DMA-reads the descriptor table; clean dirty cache lines
      * before announcing it via Set Features. */
-    nvme_cache_flush(descs, descs_size);
+    nvme_cache_flush(descs, descs_size, TRUE);
 
     KprintfH("[nvme] %s: allocated %lu KiB in %lu chunks (target %lu KiB, min %lu KiB)\n",
              __func__, (ULONG)(total_allocated >> 10), (ULONG)chunks_allocated,

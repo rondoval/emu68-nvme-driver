@@ -86,7 +86,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
         Kprintf("[nvme] %s: SQ alloc (%lu B) failed\n", __func__, sq_bytes);
         goto fail_sq;
     }
-    nvme_cache_flush(q->sq, sq_bytes);
+    nvme_cache_flush(q->sq, sq_bytes, TRUE); /* device reads SQ entries */
 
     q->cq = dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE, cq_bytes);
     if (!q->cq)
@@ -94,9 +94,9 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
         Kprintf("[nvme] %s: CQ alloc (%lu B) failed\n", __func__, cq_bytes);
         goto fail_cq;
     }
-    /* CQ is zero-init from dma_zalloc; flush so the device sees
-     * phase=0 on every slot before its first real CQE write. */
-    nvme_cache_flush(q->cq, cq_bytes);
+    /* CQ is zero-init from dma_zalloc; clean+invalidate (device writes it) so the
+     * zeroed phase=0 reaches RAM and the dirty lines can't evict over CQEs. */
+    nvme_cache_flush(q->cq, cq_bytes, FALSE);
 
     q->inflight = pool_zalloc(ctrl->memoryPool, inflight_bytes);
     if (!q->inflight)
