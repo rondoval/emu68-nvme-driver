@@ -31,6 +31,37 @@
 #define NSCMD_NVME_IO_PASS     0x8021   /* submit on the I/O queue (not yet supported) */
 #define NSCMD_NVME_TRIM        0x8022   /* deallocate ranges: io_Data = NVMeTrimRange[], io_Length = nr*sizeof */
 #define NSCMD_NVME_WRITE_ZEROES 0x8023  /* zero a single range: 64-bit byte offset in io_Offset/io_Actual, byte count in io_Length, no io_Data */
+#define NSCMD_NVME_UNIT_INFO   0x8024   /* fill struct NVMeUnitInfo for this unit */
+
+/*
+ * struct NVMeUnitInfo - unit/controller topology query (NSCMD_NVME_UNIT_INFO).
+ *
+ * Exec units map 1:1 to NVMe namespaces, so several units can live on one
+ * controller.  This query tells userland which namespace a unit is and which
+ * unit range shares its controller, plus the controller registers and
+ * identity strings that are not reachable through admin passthrough.
+ *
+ * io_Data points to this struct; io_Length must be at least
+ * sizeof(struct NVMeUnitInfo) or the driver fails with IOERR_BADLENGTH.
+ * On success io_Actual and nui_StructSize hold the bytes filled, so the
+ * struct may grow by appending fields in later driver versions.
+ *
+ * The identity strings are NUL-terminated with trailing spaces stripped.
+ */
+struct NVMeUnitInfo
+{
+    ULONG nui_StructSize;     /* OUT: bytes the driver filled */
+    ULONG nui_UnitNumber;     /* global unit number (echoed) */
+    ULONG nui_Nsid;           /* this unit's namespace ID (1-based) */
+    ULONG nui_CtrlFirstUnit;  /* first unit number on the owning controller */
+    ULONG nui_CtrlUnitCount;  /* units exposed by the owning controller */
+    ULONG nui_CapLo;          /* controller CAP register, low 32 bits */
+    ULONG nui_CapHi;          /* controller CAP register, high 32 bits */
+    ULONG nui_Version;        /* controller VS register (NVMe version) */
+    char  nui_Serial[24];     /* Identify sn[], 20 chars used */
+    char  nui_Model[44];      /* Identify mn[], 40 chars used */
+    char  nui_Firmware[12];   /* Identify fr[], 8 chars used */
+};
 
 /*
  * struct NVMeTrimRange - one range for NSCMD_NVME_TRIM (NVMe DSM Deallocate).
@@ -59,6 +90,10 @@ struct NVMeTrimRange
  * The IOStdReq's io_Data points to this struct; io_Length must equal
  * sizeof(struct NVMePassthruCmd).  On reply, io_Actual holds bytes
  * transferred and io_Error holds the NVMe status code (0 = success).
+ *
+ * IOERR_UNITBUSY means the admin queue is saturated; passthrough commands
+ * are not queued under back-pressure (unlike block I/O) — the caller is a
+ * diagnostic tool and should simply retry.
  *
  * Layout mirrors Linux's `struct nvme_passthru_cmd` (32-bit variant).
  * For the 64-bit result variant or metadata buffers, see TODO notes.

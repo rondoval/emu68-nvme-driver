@@ -52,6 +52,7 @@ static const UWORD SupportedCommands[] = {
     NSCMD_NVME_IO_PASS,
     NSCMD_NVME_TRIM,
     NSCMD_NVME_WRITE_ZEROES,
+    NSCMD_NVME_UNIT_INFO, /* quick */
     0};
 
 /*
@@ -75,6 +76,53 @@ static void do_nscmd_devicequery(struct IOStdReq *io)
     dq->nsdqr_DeviceSubType = 0;
     dq->nsdqr_SupportedCommands = (UWORD *)SupportedCommands;
     io->io_Actual = dq->nsdqr_SizeAvailable;
+    io->io_Error = 0;
+}
+
+/* Copy a fixed-width Identify text field, NUL-terminating and stripping the
+ * trailing space padding so userland never re-implements the trim. */
+static void copy_trimmed(char *dst, const char *src, ULONG src_len)
+{
+    ULONG len = src_len;
+    while (len > 0 && (src[len - 1] == ' ' || src[len - 1] == '\0'))
+        len--;
+    CopyMem((APTR)src, dst, len);
+    dst[len] = '\0';
+}
+
+/*
+ * Handle NSCMD_NVME_UNIT_INFO inline (cached unit/ctrl state plus two MMIO
+ * register reads; no admin command, no task round-trip).
+ */
+static void do_nscmd_unit_info(struct IOStdReq *io, struct NVMeUnit *unit)
+{
+    struct NVMeUnitInfo *info = (struct NVMeUnitInfo *)io->io_Data;
+    struct NVMeController *ctrl = unit->ctrl;
+
+    if (!info || io->io_Length < (ULONG)sizeof(struct NVMeUnitInfo))
+    {
+        KprintfH("[nvme] NSCMD_NVME_UNIT_INFO: buffer too small (need %lu)\n",
+                 (ULONG)sizeof(struct NVMeUnitInfo));
+        io->io_Error = IOERR_BADLENGTH;
+        return;
+    }
+
+    info->nui_StructSize = sizeof(struct NVMeUnitInfo);
+    info->nui_UnitNumber = (ULONG)unit->unitNumber;
+    info->nui_Nsid = unit->nsid;
+    info->nui_CtrlFirstUnit = ctrl->firstUnitNumber;
+    info->nui_CtrlUnitCount = ctrl->nsCount;
+    info->nui_CapLo = nvme_reg_read32(ctrl, NVME_REG_CAP);
+    info->nui_CapHi = nvme_reg_read32(ctrl, NVME_REG_CAP + 4);
+    info->nui_Version = nvme_reg_read32(ctrl, NVME_REG_VS);
+    copy_trimmed(info->nui_Serial, ctrl->id_strings.serial,
+                 sizeof(ctrl->id_strings.serial));
+    copy_trimmed(info->nui_Model, ctrl->id_strings.model,
+                 sizeof(ctrl->id_strings.model));
+    copy_trimmed(info->nui_Firmware, ctrl->id_strings.firmware,
+                 sizeof(ctrl->id_strings.firmware));
+
+    io->io_Actual = info->nui_StructSize;
     io->io_Error = 0;
 }
 
@@ -228,6 +276,10 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __
 
     case NSCMD_DEVICEQUERY:
         do_nscmd_devicequery(io);
+        break;
+
+    case NSCMD_NVME_UNIT_INFO:
+        do_nscmd_unit_info(io, unit);
         break;
 
     case NSCMD_NVME_ADMIN_PASS:
