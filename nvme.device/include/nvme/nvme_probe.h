@@ -26,6 +26,13 @@ s32 nvme_probe_all(struct NVMeDevice *base);
  */
 void nvme_unprobe_all(struct NVMeDevice *base);
 
+/*
+ * nvme_reset_quiesce_all - minimal pre-reset shutdown of every controller
+ * (CC.SHN handshake only).  Interrupt-safe; called from the reset_guard
+ * prepare callback.
+ */
+void nvme_reset_quiesce_all(struct NVMeDevice *base);
+
 /* ------------------------------------------------------------------ */
 /* Per-controller lifecycle                                            */
 /* ------------------------------------------------------------------ */

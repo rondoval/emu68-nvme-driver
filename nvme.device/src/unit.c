@@ -7,6 +7,10 @@
 #include <proto/exec.h>
 #endif
 
+#include <exec/io.h>
+
+#include <memory.h>
+
 #include "device.h"
 #include "nvme/nvme_ctrl.h"
 
@@ -52,11 +56,50 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
 }
 
 /*
+ * nvme_unit_close_flush - synchronous NVMe Flush through the unit task.
+ *
+ * Issued on the last close of a unit so data in the drive's volatile
+ * write cache reaches NAND even if power is pulled later.  Runs in the
+ * CloseDevice caller's context (never ctrl->task), so waiting is safe.
+ * Skipped when the controller has no volatile write cache.
+ */
+static void nvme_unit_close_flush(struct NVMeUnit *unit)
+{
+    struct NVMeController *ctrl = unit->ctrl;
+
+    if (!(ctrl->vwc & NVME_CTRL_VWC_PRESENT))
+        return;
+    if (unit->flags & NVME_UNIT_DEAD)
+        return;
+    if (!ctrl->unit_task)
+        return;
+
+    struct MsgPort *port = CreateMsgPort();
+    if (!port)
+        return;
+
+    struct IOStdReq io;
+    mem_zero(&io, sizeof(io));
+    io.io_Message.mn_Node.ln_Type = NT_MESSAGE;
+    io.io_Message.mn_ReplyPort = port;
+    io.io_Message.mn_Length = sizeof(io);
+    io.io_Unit = (struct Unit *)unit;
+    io.io_Command = CMD_UPDATE;
+
+    KprintfH("[nvme] %s: flushing unit %ld on last close\n",
+             __func__, unit->unitNumber);
+    PutMsg(ctrl->msgPort, &io.io_Message);
+    WaitPort(port);
+    GetMsg(port);
+    DeleteMsgPort(port);
+}
+
+/*
  * UnitClose - close a namespace unit.
  *
  * the controller stays brought up until device expunge.
- * UnitClose just decrements the counters.  Teardown lives in
- * nvme_unprobe_all().
+ * UnitClose decrements the counters; on the last close it flushes the
+ * drive's volatile write cache.  Teardown lives in nvme_unprobe_all().
  *
  * Returns the new unit open count (0 means the namespace is now idle).
  */
@@ -71,6 +114,9 @@ s32 UnitClose(struct NVMeUnit *unit)
         unit->unit.unit_OpenCnt--;
     if (ctrl->openUnits > 0)
         ctrl->openUnits--;
+
+    if (unit->unit.unit_OpenCnt == 0)
+        nvme_unit_close_flush(unit);
 
     return (s32)unit->unit.unit_OpenCnt;
 }

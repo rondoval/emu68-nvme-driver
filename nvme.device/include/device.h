@@ -8,6 +8,7 @@
 #endif
 
 #include <types.h>   /* u64 / s32 used in the struct + prototype declarations below */
+#include <reset_guard.h>
 
 struct NVMeController;
 
@@ -48,6 +49,7 @@ struct NVMeDevice
     ULONG segList;
     struct Library *utilityBase;
     struct Library *pcieBase;
+    struct reset_guard resetGuard; /* pre-reset DMA quiesce + SHN hooks */
 
     BOOL probed;                /* TRUE after nvme_probe_all() has run */
     struct MinList controllers; /* list of NVMeController */

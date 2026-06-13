@@ -641,6 +641,62 @@ s32 nvme_probe_all(struct NVMeDevice *base)
 }
 
 /*
+ * nvme_ctrl_reset_quiesce - minimal pre-reset shutdown: the CC.SHN=NORMAL
+ * handshake only.  Interrupt-safe (MMIO + busy-poll; reset_guard prepare
+ * contract).
+ *
+ * Shutdown processing makes the controller finish or abort outstanding
+ * commands, flush its caches, and cease all host-memory access (HMB
+ * included) once CSTS.SHST reads complete.
+ */
+static void nvme_ctrl_reset_quiesce(struct NVMeController *ctrl)
+{
+    if (ctrl->bar0)
+        nvme_disable_ctrl(ctrl, TRUE); /* CC.SHN=normal */
+}
+
+/*
+ * nvme_reset_quiesce_all - quiesce every probed controller before a
+ * machine reset so each SSD records a safe shutdown and ceases all
+ * host-memory access (HMB included).
+ */
+void nvme_reset_quiesce_all(struct NVMeDevice *base)
+{
+    for (struct MinNode *node = base->controllers.mlh_Head; node->mln_Succ != NULL; node = node->mln_Succ)
+    {
+        struct NVMeController *ctrl = (struct NVMeController *)node;
+        nvme_ctrl_reset_quiesce(ctrl);
+    }
+}
+
+/*
+ * nvme_ctrl_shutdown - quiesce a controller and run the NVMe shutdown
+ * handshake (CC.SHN=NORMAL, wait CSTS.SHST complete).
+ */
+static void nvme_ctrl_shutdown(struct NVMeController *ctrl)
+{
+    /* Stop draining both ports before tearing the device down, then
+     * force-complete every still-inflight request on both queues
+     * so blocked waiters / IOStdReqs unblock before we free rings. */
+    nvme_quiesce_io_queues(ctrl);
+    nvme_quiesce_admin_queue(ctrl);
+    nvme_flush_queue_inflight(&ctrl->io_q);
+    nvme_flush_queue_inflight(&ctrl->admin_q);
+
+    if (ctrl->bar0)
+    {
+        /* Release Host Memory Buffer first.  This issues Set
+         * Features with NVME_HOST_MEM_ENABLE=0 so the controller
+         * stops DMA-ing into the buffer before we free its
+         * pages.  Must happen while the admin queue is still
+         * functional, i.e. before nvme_disable_ctrl. */
+        nvme_free_host_mem(ctrl);
+
+        nvme_disable_ctrl(ctrl, TRUE); /* CC.SHN=normal */
+    }
+}
+
+/*
  * nvme_unprobe_all - tear down every probed NVMe controller.
  *
  * Called from device expunge.  For each controller: clean-shutdown
@@ -664,24 +720,10 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         KprintfH("[nvme] %s: tearing down ctrl %lx\n", __func__,
                  (ULONG)ctrl->pci_dev);
 
-        /* Stop draining both ports before tearing the device down, then
-         * force-complete every still-inflight request on both queues
-         * so blocked waiters / IOStdReqs unblock before we free rings. */
-        nvme_quiesce_io_queues(ctrl);
-        nvme_quiesce_admin_queue(ctrl);
-        nvme_flush_queue_inflight(&ctrl->io_q);
-        nvme_flush_queue_inflight(&ctrl->admin_q);
+        nvme_ctrl_shutdown(ctrl);
 
         if (ctrl->bar0)
         {
-            /* Release Host Memory Buffer first.  This issues Set
-             * Features with NVME_HOST_MEM_ENABLE=0 so the controller
-             * stops DMA-ing into the buffer before we free its
-             * pages.  Must happen while the admin queue is still
-             * functional, i.e. before nvme_disable_ctrl. */
-            nvme_free_host_mem(ctrl);
-
-            nvme_disable_ctrl(ctrl, TRUE); /* CC.SHN=normal */
             nvme_teardown_queue(&ctrl->io_q);
             nvme_teardown_queue(&ctrl->admin_q);
         }
