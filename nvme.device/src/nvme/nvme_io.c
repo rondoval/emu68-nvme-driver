@@ -766,13 +766,15 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
         if (!req)
         {
             /* tag / pool pressure: if we already have siblings in
-             * flight, let them drain and re-pump from CQE.  If we
-             * have nothing in flight, latch the error and bail. */
-            //TODO don't bail
+             * flight, let them drain and re-pump from CQE.  With
+             * nothing in flight no CQE will re-pump us — park the
+             * context on ctrl->ctx_stalled; the unit task re-pumps
+             * it as completions free slots. */
             if (ctx->inflight == 0)
             {
-                ctx->first_error = err;
-                return err;
+                ctx->stalled = TRUE;
+                AddTail((struct List *)&ctrl->ctx_stalled, (struct Node *)ctx);
+                return NVME_IO_ASYNC;
             }
             break;
         }
@@ -802,21 +804,33 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
                  (ULONG)(ctx->dispatched - next_bytes),
                  (ULONG)next_bytes, (ULONG)ctx->inflight);
 
-        if (nvme_submit_io(req) != NVME_IO_ASYNC)
+        BYTE suberr = nvme_submit_io(req);
+        if (suberr != NVME_IO_ASYNC)
         {
-            // TODO is this needed. we shuld put it to backpressure buffer
             /* Rollback accounting; the request has not entered the SQ.
              * nvme_submit_io already destroyed @req. */
             ctx->dispatched -= next_bytes;
             ctx->inflight--;
-            if (ctx->inflight == 0)
+
+            if (suberr == IOERR_UNITBUSY)
             {
-                ctx->first_error = IOERR_BADADDRESS;
-                return IOERR_BADADDRESS;
+                /* SQ full: pressure, not an error.  Flying siblings
+                 * re-pump from their CQEs; with nothing in flight,
+                 * park for the unit task instead. */
+                if (ctx->inflight == 0)
+                {
+                    ctx->stalled = TRUE;
+                    AddTail((struct List *)&ctrl->ctx_stalled, (struct Node *)ctx);
+                    return NVME_IO_ASYNC;
+                }
+                break;
             }
+
+            ctx->first_error = suberr;
+            if (ctx->inflight == 0)
+                return suberr;
             /* In-flight siblings will fire CQEs and re-pump us.
-             * Latch so they don't try to dispatch more either. */
-            ctx->first_error = IOERR_BADADDRESS;
+             * Latched so they don't try to dispatch more either. */
             break;
         }
     }

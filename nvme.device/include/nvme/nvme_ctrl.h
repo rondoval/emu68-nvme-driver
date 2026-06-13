@@ -277,6 +277,9 @@ struct NVMeController
 	struct MsgPort *msgPort; /* Shared I/O request port for all block namespaces. */
 	struct MinList io_pending; /* I/O held for back-pressure when io_q is full; FIFO,
 	                            * drained by the unit task as completions free slots. */
+	struct MinList ctx_stalled; /* Chunked-I/O contexts parked under tag/SQ pressure
+	                             * with no sibling in flight; FIFO, re-pumped by the
+	                             * unit task before io_pending is drained. */
 
 	struct Task *admin_task; /* AdminWorker handling blocking admin operations. */
 	BYTE scan_signal; /* Signal bit requesting namespace rescan work. */

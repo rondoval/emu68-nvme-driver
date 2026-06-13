@@ -331,7 +331,10 @@ void nvme_complete_rq(struct nvme_request *req)
 				ctx->first_error == 0)
 				nvme_io_context_pump(ctx);
 
-			if (ctx->inflight == 0)
+			/* A pump under tag/SQ pressure with nothing left in
+			 * flight parks the ctx (ctx->stalled) for the unit task
+			 * to re-pump — it must not be finished here. */
+			if (ctx->inflight == 0 && !ctx->stalled)
 				nvme_io_context_finish(ctx);
 			return;
 		}

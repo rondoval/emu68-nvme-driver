@@ -16,6 +16,8 @@
 
 #include "device.h"
 #include "nvme/nvme_ctrl.h"  /* struct NVMeController, nvme_ctrl_state */
+#include "nvme/nvme_completion.h" /* struct nvme_io_context (stalled re-pump) */
+#include "nvme/nvme_io.h"    /* NVME_IO_ASYNC, nvme_io_context_pump/_finish */
 #include "nvme/nvme_probe.h" /* nvme_reset_controller */
 #include "nvme/nvme_queue.h" /* nvme_process_completions, nvme_tick_watchdog */
 
@@ -61,6 +63,25 @@ static void nvme_drain_msgport(struct NVMeController *ctrl)
      * once for the whole drain pass (one doorbell instead of one per command). */
     nvme_sq_batch_begin(&ctrl->io_q);
 
+    /* 0. Re-pump parked chunked contexts first: they were admitted before
+     * the queue filled, so they outrank stashed and new I/O.  A context
+     * that immediately re-parks itself means slots are still tight. */
+    while (ctrl->io_q.inflight_count < ctrl->io_max_inflight)
+    {
+        struct nvme_io_context *ctx =
+            (struct nvme_io_context *)RemHead((struct List *)&ctrl->ctx_stalled);
+        if (!ctx)
+            break;
+        ctx->stalled = FALSE;
+        BYTE err = nvme_io_context_pump(ctx);
+        if (ctx->stalled)
+            break;
+        /* A synchronous setup error with nothing in flight has no CQE to
+         * finish the request — do it here. */
+        if (err != NVME_IO_ASYNC && ctx->inflight == 0)
+            nvme_io_context_finish(ctx);
+    }
+
     /* 1. Resubmit stashed I/O first (FIFO) while the queue has room. */
     while (ctrl->io_q.inflight_count < ctrl->io_max_inflight)
     {
@@ -102,6 +123,8 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     _NewMinList(&ctrl->retry_list);
     /* Back-pressure FIFO for I/O the full I/O queue can't accept yet */
     _NewMinList(&ctrl->io_pending);
+    /* Chunked contexts parked under tag/SQ pressure (see nvme_drain_msgport) */
+    _NewMinList(&ctrl->ctx_stalled);
     ctrl->msgPort = CreateMsgPort();
     if (!ctrl->msgPort)
     {
@@ -217,6 +240,16 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
         {
             pio->io_Error = IOERR_ABORTED;
             ReplyMsg((struct Message *)pio);
+        }
+
+        /* Likewise for parked chunked contexts: nothing is in flight for
+         * them, so _finish replies the originating IOStdReq and frees. */
+        struct nvme_io_context *sctx;
+        while ((sctx = (struct nvme_io_context *)RemHead((struct List *)&ctrl->ctx_stalled)))
+        {
+            sctx->stalled = FALSE;
+            sctx->first_error = IOERR_ABORTED;
+            nvme_io_context_finish(sctx);
         }
     }
 

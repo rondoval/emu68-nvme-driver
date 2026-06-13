@@ -23,6 +23,9 @@ struct IOStdReq;
  */
 struct nvme_io_context
 {
+    struct MinNode stall_node; /* MUST be first: ctrl->ctx_stalled link while
+                                * parked under tag/SQ pressure with no sibling
+                                * in flight (see nvme_io_context_pump) */
     struct IOStdReq *io;   /* originating Amiga request    */
     struct NVMeUnit *unit; /* namespace unit               */
     u64 start_lba;         /* LBA of byte 0 of the I/O     */
@@ -36,6 +39,9 @@ struct nvme_io_context
                             * nvme_io_submit_rw (direct, non-bounced transfer),
                             * so siblings skip the per-chunk data flush and the
                             * post-DMA invalidate is done once in _finish. */
+    BOOL stalled;            /* parked on ctrl->ctx_stalled; the unit task
+                            * re-pumps as completions free slots and the
+                            * completion path must not _finish a parked ctx */
     APTR user_data;        /* == io->io_Data, base for chunk slicing */
 };
 

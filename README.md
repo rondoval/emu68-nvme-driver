@@ -165,19 +165,20 @@ controller level, but those namespaces will not be exposed as usable Amiga stora
 
 Two CLI tools are built and installed with the component:
 
-- `nvmeadm` is the main release-facing utility for controller identification, health reporting,
-  logs, and selected safe admin actions.
+- `nvmeadm` is the main release-facing utility for drive identification, health reporting, logs,
+  self-tests, firmware updates, and maintenance (format, sanitize). See
+  [README-nvmeadm.md](README-nvmeadm.md) for the full user guide.
 - `nvmeinfo` is a lower-level helper and development tool for passthrough-oriented inspection.
 
 Examples:
 
 ```sh
-nvmeadm identify 0
-nvmeadm identify caps 0
-nvmeadm smart 0
-nvmeadm error-log 0
-nvmeadm fw-log 0
-nvmeadm self-test status 0
+nvmeadm units
+nvmeadm identify
+nvmeadm identify caps
+nvmeadm smart UNIT 1
+nvmeadm error-log
+nvmeadm self-test status
 ```
 
 The exact subcommand surface is intentionally narrower than Linux `nvme-cli`. The goal is to
