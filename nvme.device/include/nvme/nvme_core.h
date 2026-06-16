@@ -41,4 +41,14 @@ typedef u32 size_t;
 #define NVME_CTRL_PAGE_SHIFT	12
 #define NVME_CTRL_PAGE_SIZE	(1 << NVME_CTRL_PAGE_SHIFT)
 
+/*
+ * Small PRP-list pool.  A PRP list of N page-pointers (8 bytes each) that fits
+ * in NVME_SMALL_POOL_SIZE bytes (no chaining) is allocated from a small slab
+ * instead of burning a full NVME_CTRL_PAGE_SIZE page — the common case
+ * (≤ NVME_SMALL_POOL_ENTRIES × 4 KiB ≈ 128 KiB transfer needs ≤ 256 B of list).
+ * Mirrors Linux's prp_small_pool (256 B, 32 entries).
+ */
+#define NVME_SMALL_POOL_SIZE	256u
+#define NVME_SMALL_POOL_ENTRIES	(NVME_SMALL_POOL_SIZE / 8u)
+
 #endif /* NVME_CORE_H */

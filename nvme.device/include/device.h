@@ -8,6 +8,7 @@
 #endif
 
 #include <types.h>   /* u64 / s32 used in the struct + prototype declarations below */
+#include <reset_guard.h>
 
 struct NVMeController;
 
@@ -35,6 +36,10 @@ struct NVMeController;
 /* Mark internal pool-allocated requests so ProcessCommand can free them */
 #define REQ_INTERNAL (1UL << 0)
 
+enum nvme_unit_features {
+    NVME_NS_DEAC = 1 << 2, /* DEAC bit in Write Zeroes supported */
+};
+
 /*
  * Device base structure — one instance per nvme.device resident.
  */
@@ -44,6 +49,7 @@ struct NVMeDevice
     ULONG segList;
     struct Library *utilityBase;
     struct Library *pcieBase;
+    struct reset_guard resetGuard; /* pre-reset DMA quiesce + SHN hooks */
 
     BOOL probed;                /* TRUE after nvme_probe_all() has run */
     struct MinList controllers; /* list of NVMeController */
@@ -71,6 +77,8 @@ struct NVMeUnit
     ULONG blockSize;
     ULONG blockShift; /* log2(blockSize) */
     u64 logicalSectors;
+    ULONG features;   /* namespace capability bits */
+    u32 wz_max_bytes; /* max bytes one Write Zeroes covers: min(max_zeroes_sectors, 64K blocks), block-aligned. Cached at nvme_alloc_nvmeunit. */
 
     /* Media-change counter reported by TD_CHANGENUM and checked against the
      * caller's iotd_Count on ETD_* commands.  Fixed media: initialised to 1 at

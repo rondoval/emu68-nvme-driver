@@ -26,6 +26,13 @@ s32 nvme_probe_all(struct NVMeDevice *base);
  */
 void nvme_unprobe_all(struct NVMeDevice *base);
 
+/*
+ * nvme_reset_quiesce_all - minimal pre-reset shutdown of every controller
+ * (CC.SHN handshake only).  Interrupt-safe; called from the reset_guard
+ * prepare callback.
+ */
+void nvme_reset_quiesce_all(struct NVMeDevice *base);
+
 /* ------------------------------------------------------------------ */
 /* Per-controller lifecycle                                            */
 /* ------------------------------------------------------------------ */
@@ -48,6 +55,6 @@ void nvme_reset_controller(struct NVMeController *ctrl);
  * namespace geometry.
  */
 struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl, u32 nsid,
-		ULONG blockSize, u8 blockShift, u64 logicalSectors);
+		ULONG blockSize, u8 blockShift, u64 logicalSectors, ULONG features);
 
 #endif /* NVME_PROBE_H */

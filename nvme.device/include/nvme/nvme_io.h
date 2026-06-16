@@ -3,6 +3,7 @@
 #define NVME_IO_H
 
 #include <nvme/nvme_core.h>     /* BOOL, u64, ULONG, u8 */
+#include <dma_mem.h>            /* struct dma_mem_ctx, dma_addr_reachable */
 
 struct nvme_dsm_range;
 struct nvme_io_context;
@@ -30,8 +31,13 @@ struct IOStdReq;
  * into sibling commands ridden by a parent nvme_io_context; up to
  * NVME_MAX_INFLIGHT_PER_IO siblings are kept in flight.
  *
- * Callers must have validated namespace bounds (LBA, block count)
- * before calling.
+ * nvme_io_submit_rw and nvme_io_submit_write_zeroes validate length and
+ * namespace bounds themselves: a zero-length transfer returns
+ * IOERR_BADLENGTH and an LBA range past the namespace returns
+ * IOERR_BADADDRESS.  nvme_io_submit_rw additionally rejects a NULL
+ * @buffer (a caller error, not a zero-fill request) with IOERR_BADADDRESS.
+ * For nvme_io_submit_dsm the caller validates each range while building
+ * the list.
  *
  * nvme_io_submit_dsm: @ranges must be a dma_zalloc'd page-aligned
  * buffer of size sizeof(*ranges) * NVME_DSM_MAX_RANGES (4 KiB) with
@@ -47,6 +53,8 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
 BYTE nvme_io_submit_flush(struct NVMeUnit *unit, struct IOStdReq *io);
 BYTE nvme_io_submit_dsm(struct NVMeUnit *unit, struct IOStdReq *io,
                         struct nvme_dsm_range *ranges, u16 nr);
+BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
+                                 u64 lba, ULONG blocks);
 
 /*
  * nvme_io_context_pump - dispatch as many chunk siblings as the
@@ -95,20 +103,24 @@ BYTE nvme_submit_io(struct nvme_request *req);
 void nvme_cleanup_cmd(struct nvme_request *req);
 
 /*
- * nvme_needs_bounce - true if @buffer can't be DMA'd directly.
+ * nvme_needs_bounce - true if [@buffer, @buffer+@len) can't be DMA'd directly.
  *
- * Bounces only buffers PCIe cannot reach (Amiga Chip RAM, first 2 MiB
- * under PiStorm) or that fail the NVMe spec §4.1.2 PRP1 Dword-alignment
- * rule.
+ * Bounces buffers PCIe cannot reach (Amiga Chip RAM and any Zorro/accelerator
+ * Fast RAM — only Emu68 Pi-DRAM is reachable; see dma_addr_reachable()) and
+ * buffers that aren't cache-line aligned.  The latter is stricter than the NVMe
+ * spec §4.1.2 PRP1 Dword rule on purpose: a read (device writes RAM) into a
+ * buffer whose start isn't 64-byte aligned shares its first/last cache line with
+ * neighbouring data, and the post-DMA invalidate would drop a concurrent write to
+ * that neighbour.  Block lengths are always a sector multiple (≥512 ⇒ 64-multiple),
+ * so a 64-aligned start is enough to make the maintained range whole cache lines.
+ * See the 68040.library CachePreDMA/PostDMA contract.
  */
-static inline BOOL nvme_needs_bounce(const void *buffer)
+static inline BOOL nvme_needs_bounce(struct dma_mem_ctx *ctx, const void *buffer, ULONG len)
 {
-    ULONG addr = (ULONG)buffer;
-
-    if (addr <= 0x1FFFFFu)
-        return TRUE;          /* Chip RAM — PCIe DMA cannot reach */
-    if (addr & 0x3u)
-        return TRUE;          /* NVMe spec §4.1.2: PRP1 Dword-aligned */
+    if (!dma_addr_reachable(ctx, (APTR)buffer, len))
+        return TRUE;          /* unreachable by PCIe DMA (Chip / Zorro / accel RAM) */
+    if ((ULONG)buffer & DMA_ALIGN_MIN_MASK)
+        return TRUE;          /* not cache-line aligned — would share boundary lines */
     return FALSE;
 }
 

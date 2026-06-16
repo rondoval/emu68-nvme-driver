@@ -145,7 +145,7 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
      * pointers are recovered from descs[i].addr on teardown — no
      * separate back-pointer array. */
     u32 descs_size = hmmaxd_cap * (u32)sizeof(struct nvme_host_mem_buf_desc);
-    struct nvme_host_mem_buf_desc *descs = dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE, descs_size);
+    struct nvme_host_mem_buf_desc *descs = dma_zalloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE, descs_size);
     if (!descs)
     {
         Kprintf("[nvme] %s: descriptor table alloc failed (%lu bytes)\n", __func__, (ULONG)descs_size);
@@ -162,7 +162,7 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
     /* Phase 1: try @preferred in one block. */
     if (preferred >= floor)
     {
-        APTR buf = dma_alloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE, (ULONG)preferred);
+        APTR buf = dma_alloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE, (ULONG)preferred);
         if (buf)
         {
             descs[0].addr = le64((u64)(ULONG)buf);
@@ -189,7 +189,7 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
         if (chunk_size < floor)
             break; /* tail too small to be a valid descriptor */
 
-        APTR buf = dma_alloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE, (ULONG)chunk_size);
+        APTR buf = dma_alloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE, (ULONG)chunk_size);
         if (buf)
         {
             descs[chunks_allocated].addr = le64((u64)(ULONG)buf);
@@ -220,9 +220,9 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
         return -1;
     }
 
-    /* Device DMA-reads the descriptor table; flush dirty cache lines
+    /* Device DMA-reads the descriptor table; clean dirty cache lines
      * before announcing it via Set Features. */
-    nvme_cache_flush(descs, descs_size);
+    nvme_cache_flush(descs, descs_size, TRUE);
 
     KprintfH("[nvme] %s: allocated %lu KiB in %lu chunks (target %lu KiB, min %lu KiB)\n",
              __func__, (ULONG)(total_allocated >> 10), (ULONG)chunks_allocated,
@@ -249,9 +249,9 @@ static void hmb_chunks_free(struct NVMeController *ctrl)
         {
             APTR buf = (APTR)(ULONG)le64(descs[i].addr);
             if (buf)
-                dma_free(ctrl->memoryPool, buf);
+                dma_free(ctrl->dmaPool, buf);
         }
-        dma_free(ctrl->memoryPool, descs);
+        dma_free(ctrl->dmaPool, descs);
         ctrl->hmb_descs = NULL;
     }
     ctrl->hmb_nr_descs = 0;

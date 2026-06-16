@@ -12,6 +12,7 @@
 #include <devices/trackdisk.h>
 #include <devices/newstyle.h>
 #include <devices/scsidisk.h>
+#include "devices/nvme.h" /* NSCMD_NVME_WRITE_ZEROES */
 
 #include "device.h"
 #include "nvme/nvme_ctrl.h"  /* struct NVMeController */
@@ -91,6 +92,7 @@ void ProcessCommand(struct IOStdReq *io)
     case NSCMD_ETD_READ64:
     case NSCMD_ETD_WRITE64:
     case NSCMD_ETD_FORMAT64:
+    case NSCMD_NVME_WRITE_ZEROES:
         high_offset = (ULONG)io->io_Actual;
         break;
     }
@@ -136,24 +138,79 @@ void ProcessCommand(struct IOStdReq *io)
         u64 lba = decode_lba(high_offset, (ULONG)io->io_Offset, (UWORD)unit->blockShift);
         ULONG blockCount = (ULONG)io->io_Length >> unit->blockShift;
 
-        if (blockCount == 0)
-        {
-            KprintfH("[nvme] %s: blockCount is zero (io_Length=%lu blockShift=%lu)\n",
-                     __func__, (ULONG)io->io_Length, (ULONG)unit->blockShift);
-            reply_io(io, IOERR_BADLENGTH);
-            break;
-        }
-        if (unit->logicalSectors > 0 && lba + blockCount > unit->logicalSectors)
-        {
-            KprintfH("[nvme] %s: LBA out of range (lba=0x%08lx%08lx blockCount=%lu logicalSectors=%lu)\n",
-                     __func__, (ULONG)(lba >> 32), (ULONG)lba, blockCount, (ULONG)unit->logicalSectors);
-            reply_io(io, IOERR_BADADDRESS);
-            break;
-        }
-
         BYTE error = nvme_io_submit_rw(unit, io, lba, blockCount,
                                        direction == READ ? nvme_cmd_read : nvme_cmd_write,
                                        io->io_Data);
+        if (error != NVME_IO_ASYNC)
+            reply_io(io, error);
+        break;
+    }
+
+    case NSCMD_NVME_WRITE_ZEROES:
+    {
+        u64 lba = decode_lba(high_offset, (ULONG)io->io_Offset, (UWORD)unit->blockShift);
+        ULONG blockCount = (ULONG)io->io_Length >> unit->blockShift;
+
+        BYTE error = nvme_io_submit_write_zeroes(unit, io, lba, blockCount);
+        if (error != NVME_IO_ASYNC)
+            reply_io(io, error);
+        break;
+    }
+
+    case NSCMD_NVME_TRIM:
+    {
+        struct NVMeController *ctrl = unit->ctrl;
+        const struct NVMeTrimRange *tr = (const struct NVMeTrimRange *)io->io_Data;
+        ULONG nr = tr ? (ULONG)io->io_Length / (ULONG)sizeof(struct NVMeTrimRange) : 0;
+
+        if (!tr || nr == 0)
+        {
+            reply_io(io, IOERR_BADLENGTH);
+            break;
+        }
+        if (nr > NVME_DSM_MAX_RANGES)
+        {
+            KprintfH("[nvme] %s: TRIM %lu ranges exceeds DSM cap %lu\n",
+                     __func__, nr, (ULONG)NVME_DSM_MAX_RANGES);
+            reply_io(io, IOERR_BADLENGTH);
+            break;
+        }
+
+        struct nvme_dsm_range *ranges =
+            dma_zalloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE,
+                       sizeof(*ranges) * NVME_DSM_MAX_RANGES);
+        if (!ranges)
+        {
+            reply_io(io, IOERR_SELFTEST);
+            break;
+        }
+
+        BYTE rerr = 0;
+        for (ULONG i = 0; i < nr; i++)
+        {
+            u64 slba = ((u64)tr[i].ntr_SectorHi << 32) | tr[i].ntr_SectorLo;
+            ULONG blocks = tr[i].ntr_Count;
+
+            if (blocks == 0 ||
+                (unit->logicalSectors > 0 && slba + blocks > unit->logicalSectors))
+            {
+                KprintfH("[nvme] %s: TRIM range[%lu] invalid (lba=0x%08lx%08lx blocks=%lu)\n",
+                         __func__, i, (ULONG)(slba >> 32), (ULONG)slba, blocks);
+                rerr = IOERR_BADADDRESS;
+                break;
+            }
+            ranges[i].cattr = le32(0);
+            ranges[i].nlb = le32(blocks);
+            ranges[i].slba = le64(slba);
+        }
+        if (rerr)
+        {
+            dma_free(ctrl->dmaPool, ranges);
+            reply_io(io, rerr);
+            break;
+        }
+
+        BYTE error = nvme_io_submit_dsm(unit, io, ranges, (u16)nr);
         if (error != NVME_IO_ASYNC)
             reply_io(io, error);
         break;
@@ -191,8 +248,8 @@ void ProcessCommand(struct IOStdReq *io)
         if (unit && unit->ctrl)
         {
             (void)nvme_io_abort(unit->ctrl, target);
-            if (unit->ctrl->memoryPool)
-                pool_free(unit->ctrl->memoryPool, io);
+            if (unit->ctrl->metaPool)
+                pool_free(unit->ctrl->metaPool, io);
         }
         /* Internal request: no ReplyMsg. */
         break;

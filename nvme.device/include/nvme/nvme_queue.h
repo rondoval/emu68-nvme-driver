@@ -26,13 +26,29 @@ struct nvme_queue
     struct NVMeController  *ctrl;       /* back-pointer to owning controller */
     u16                     qid;        /* 0 = admin, 1 = I/O                */
     u16                     depth;      /* number of ring slots              */
+    BOOL                    sqe_128b;   /* TRUE when this queue uses 128-byte
+                                         * SQ slots under
+                                         * NVME_QUIRK_128_BYTES_SQES (Apple).
+                                         * The command is always 64 B; only the
+                                         * slot-to-slot stride changes.       */
+    BOOL                    skip_cid_gen; /* cached NVME_QUIRK_SKIP_CID_GEN:
+                                         * command_id == tag, no generation
+                                         * bits.  Set at setup; read by
+                                         * nvme_inflight_release.            */
 
-    /* SQ ring (page-aligned, dma_alloc'd from ctrl->memoryPool). */
+    /* SQ ring (page-aligned, dma_alloc'd from ctrl->dmaPool). */
     struct nvme_command    *sq;
     u16                     sq_tail;
+    u16                     last_sq_tail;   /* sq_tail at the last doorbell write;
+                                             * the SQ-tail doorbell only needs the
+                                             * newest tail, so a run of SQEs costs
+                                             * one doorbell (Linux last_sq_tail).  */
+    u16                     sq_batch_depth; /* >0 → nvme_submit_io defers the
+                                             * doorbell; the outermost
+                                             * nvme_sq_batch_end commits it once.  */
     u32                     sq_db_off;  /* BAR0 offset of SQ-tail doorbell   */
 
-    /* CQ ring (page-aligned, dma_alloc'd from ctrl->memoryPool). */
+    /* CQ ring (page-aligned, dma_alloc'd from ctrl->dmaPool). */
     struct nvme_completion *cq;
     u16                     cq_head;
     u8                      cq_phase;   /* expected phase bit (1 → 0 → 1 …)  */
@@ -48,11 +64,14 @@ struct nvme_queue
      * helpers don't need to scan. */
     u16                     inflight_count;
 
-    /* CID free-list — pool_zalloc'd u16 array of size `depth`.
-     * nvme_alloc_tag pops from free_stack[--free_top];
-     * nvme_inflight_release pushes via free_stack[free_top++] = cid.
-     * Initialised at setup with every CID 0..depth-1 in reverse so the
-     * first pop returns CID 0. */
+    /* CID free-list — pool_zalloc'd u16 array of size `depth`, holding
+     * ENCODED CIDs (gen<<12 | tag), not bare tags.  nvme_alloc_cid pops
+     * from free_stack[--free_top]; nvme_inflight_release bumps the slot's
+     * generation and pushes the next encoded CID via free_stack[free_top++].
+     * The generation thus rides in the free entry while the slot is idle and
+     * in inflight[tag]->cid while in flight — no separate gen array needed.
+     * Initialised at setup with every CID 0..depth-1 (gen 0) in reverse so
+     * the first pop returns CID 0. */
     u16                    *free_stack;
     u16                     free_top;
 };
@@ -72,38 +91,63 @@ void nvme_process_completions(struct NVMeController *ctrl);
 void nvme_tick_watchdog(struct NVMeController *ctrl);
 
 /*
+ * SQ-tail doorbell batching (mirrors Linux nvme_write_sq_db / commit_rqs).
+ *
+ * nvme_submit_io rings the doorbell immediately when sq_batch_depth == 0.
+ * A caller that submits several commands in one unit-task pass brackets the
+ * run with nvme_sq_batch_begin/_end so the doorbell is written once for the
+ * whole batch instead of once per command.  The depth counter nests safely:
+ * an inner batch (e.g. the chunk pump running inside the msgport drain) only
+ * commits when the outermost _end unwinds to depth 0.
+ */
+void nvme_sq_batch_begin(struct nvme_queue *q);
+void nvme_sq_batch_end(struct nvme_queue *q);
+
+/*
  * Inflight slot accounting + CID free-list — wraps every write to
- * q->inflight[cid] and q->free_stack so the per-queue inflight_count
- * stays accurate without scanning and CID allocation is O(1).
+ * q->inflight[] and q->free_stack so the per-queue inflight_count stays
+ * accurate without scanning and CID allocation is O(1).  All three take the
+ * ENCODED CID (gen<<12 | tag) and derive the slot index as cid & 0x0fff.
  *
- * claim   - write @req into inflight[@cid]; bump inflight_count if the
- *           slot was previously NULL (re-writes by submit-retry are
- *           defensively idempotent).
- * release - clear inflight[@cid]; decrement inflight_count and push
- *           @cid back to the free stack so nvme_alloc_tag can hand it
- *           out again.  Idempotent if the slot was already NULL.
+ * claim   - write @req into inflight[tag]; bump inflight_count if the slot
+ *           was previously NULL (re-writes by submit-retry are defensively
+ *           idempotent).
+ * release - clear inflight[tag]; decrement inflight_count and push the slot's
+ *           NEXT generation (encoded CID) back to the free stack so
+ *           nvme_alloc_cid hands out a fresh gen next time.  Idempotent if
+ *           the slot was already NULL.
  *
- * alloc_tag - pop a CID off the free stack (O(1)); returns 0xFFFF when
- *             the queue is fully busy.
+ * alloc_cid - pop an encoded CID off the free stack (O(1)); returns 0xFFFF
+ *             when the queue is fully busy (a real CID never reaches 0xFFFF:
+ *             max is 0xF<<12 | (depth-1) and depth <= 256).
  */
 static inline void nvme_inflight_claim(struct nvme_queue *q, u16 cid,
                                        struct nvme_request *req)
 {
-    if (!q->inflight[cid])
+    u16 tag = cid & 0x0fff;
+    if (!q->inflight[tag])
         q->inflight_count++;
-    q->inflight[cid] = req;
+    q->inflight[tag] = req;
 }
 
 static inline void nvme_inflight_release(struct nvme_queue *q, u16 cid)
 {
-    if (!q->inflight[cid])
+    u16 tag = cid & 0x0fff;
+    if (!q->inflight[tag])
         return;
-    q->inflight[cid] = NULL;
+    q->inflight[tag] = NULL;
     q->inflight_count--;
-    q->free_stack[q->free_top++] = cid;
+    /* Bump the generation for the next reuse and stash it in the free entry.
+     * Skip under SKIP_CID_GEN: those controllers need command_id == tag.
+     * (q->skip_cid_gen is cached at setup — struct NVMeController is only
+     * forward-declared here, so we can't read ctrl->quirks directly.) */
+    u16 next = q->skip_cid_gen
+                   ? tag
+                   : (u16)(((((cid >> 12) + 1) & 0x0f) << 12) | tag);
+    q->free_stack[q->free_top++] = next;
 }
 
-static inline u16 nvme_alloc_tag(struct nvme_queue *q)
+static inline u16 nvme_alloc_cid(struct nvme_queue *q)
 {
     if (q->free_top == 0)
         return 0xFFFF;

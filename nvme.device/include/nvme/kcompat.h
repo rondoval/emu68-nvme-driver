@@ -13,14 +13,18 @@
 
 #define USEC_PER_SEC 1000000UL
 
-/* CachePreDMA writes back dirty CPU lines before device reads.
- * CachePostDMA invalidates stale CPU lines after device writes. */
-static inline void nvme_cache_flush(void *addr, ULONG len)
+/* Pre-DMA cache maintenance.  @to_device selects the memory->device direction
+ * (DMA_ReadFromRAM): the device will READ this buffer (NVMe write, SQE, PRP
+ * list), so a clean is enough and the lines stay valid.  When clear the device
+ * will WRITE the buffer (NVMe read), so it is clean+invalidated. */
+static inline void nvme_cache_flush(void *addr, ULONG len, BOOL to_device)
 {
 	ULONG cache_len = len;
-	CachePreDMA((APTR)addr, &cache_len, 0);
+	CachePreDMA((APTR)addr, &cache_len, to_device ? DMA_ReadFromRAM : 0);
 }
 
+/* Post-DMA: invalidate stale CPU lines after the device wrote @addr (NVMe read,
+ * CQE).  Not needed after a device read (the library would no-op it anyway). */
 static inline void nvme_cache_inval(void *addr, ULONG len)
 {
 	ULONG cache_len = len;

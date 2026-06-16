@@ -20,7 +20,8 @@
                                    * nvme_io_context_pump, nvme_io_context_finish */
 #include <nvme/nvme_completion.h>
 
-static const u8 nvme_max_retries = 5; // max number of retries a command may have
+/* max number of retries a command may have */
+#define NVME_MAX_RETRIES 5U
 
 /*
  * nvme_error_status - map an NVMe completion status code to a amigaos error code
@@ -155,7 +156,7 @@ static inline enum nvme_disposition nvme_decide_disposition(struct nvme_request 
 
 	if (nvme_req_noretry(req) ||
 		(req->status & NVME_STATUS_DNR) ||
-		req->retries >= nvme_max_retries)
+		req->retries >= NVME_MAX_RETRIES)
 		return COMPLETE;
 
 	/* Non-transient generic errors: the controller rejected the
@@ -244,8 +245,8 @@ static void nvme_end_req(struct nvme_request *req)
 {
 	BYTE error = nvme_error_status(req->status);
 
-	KprintfH("[nvme] end_req: req=%lx tag=%lu status=0x%lx (%s) error=%ld done=%lx waiter=%lx io=%lx\n",
-			 (ULONG)req, (ULONG)req->tag, (ULONG)req->status,
+	KprintfH("[nvme] end_req: req=%lx cid=0x%lx status=0x%lx (%s) error=%ld done=%lx waiter=%lx io=%lx\n",
+			 (ULONG)req, (ULONG)req->cid, (ULONG)req->status,
 			 nvme_get_error_status_str(req->status),
 			 (LONG)error, (ULONG)req->done,
 			 (ULONG)req->waiter, (ULONG)req->io);
@@ -294,8 +295,8 @@ static void nvme_end_req(struct nvme_request *req)
  */
 void nvme_complete_rq(struct nvme_request *req)
 {
-	KprintfH("[nvme] complete_rq: req=%lx tag=%lu opcode=0x%02lx (%s) status=0x%lx (%s) unit=%lx ctx=%lx\n",
-			 (ULONG)req, (ULONG)req->tag,
+	KprintfH("[nvme] complete_rq: req=%lx cid=0x%lx opcode=0x%02lx (%s) status=0x%lx (%s) unit=%lx ctx=%lx\n",
+			 (ULONG)req, (ULONG)req->cid,
 			 (ULONG)req->cmd.common.opcode,
 			 req->unit ? nvme_get_opcode_str(req->cmd.common.opcode)
 					   : nvme_get_admin_opcode_str(req->cmd.common.opcode),
@@ -330,7 +331,10 @@ void nvme_complete_rq(struct nvme_request *req)
 				ctx->first_error == 0)
 				nvme_io_context_pump(ctx);
 
-			if (ctx->inflight == 0)
+			/* A pump under tag/SQ pressure with nothing left in
+			 * flight parks the ctx (ctx->stalled) for the unit task
+			 * to re-pump — it must not be finished here. */
+			if (ctx->inflight == 0 && !ctx->stalled)
 				nvme_io_context_finish(ctx);
 			return;
 		}

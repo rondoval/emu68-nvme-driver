@@ -24,7 +24,7 @@
 #include <nvme/nvme_completion.h>
 #include <nvme/nvme_admin.h>
 #include <nvme/nvme_io.h>    /* NVME_IO_ASYNC, nvme_submit_io, nvme_req_destroy */
-#include <nvme/nvme_queue.h> /* nvme_alloc_tag, nvme_inflight_claim */
+#include <nvme/nvme_queue.h> /* nvme_alloc_cid, nvme_inflight_claim */
 
 /* ---------------------------------------------------------------- *
  *  Section 1: static helpers (request alloc, PRP staging)          *
@@ -66,8 +66,8 @@ static struct nvme_request *nvme_req_alloc_admin(struct NVMeController *ctrl,
         return NULL;
     }
 
-    u16 tag = nvme_alloc_tag(q);
-    if (tag == 0xFFFF)
+    u16 cid = nvme_alloc_cid(q);
+    if (cid == 0xFFFF)
     {
         slab_free(&ctrl->req_slab, req);
         *err_out = -EBUSY;
@@ -76,8 +76,8 @@ static struct nvme_request *nvme_req_alloc_admin(struct NVMeController *ctrl,
 
     req->ac = ctrl;
     req->q = q;
-    req->tag = tag;
-    nvme_inflight_claim(q, tag, req);
+    req->cid = cid;
+    nvme_inflight_claim(q, cid, req);
     return req;
 }
 
@@ -140,7 +140,10 @@ static void nvme_stage_admin_prps(struct nvme_request *req,
         req->cmd.common.dptr.prp2 = le64(prp2_addr);
     }
 
-    nvme_cache_flush(buffer, buflen);
+    /* Admin buffers are bidirectional (e.g. Identify writes, Set Features reads);
+     * clean+invalidate is safe either way.  The caller invalidates after Wait()
+     * for device-write commands. */
+    nvme_cache_flush(buffer, buflen, FALSE);
 }
 
 /* ---------------------------------------------------------------- *
@@ -201,7 +204,7 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
      * flags the caller may have left set — admin commands always use
      * PRPs on this driver. */
     nvme_init_request(req, cmd);
-    req->cmd.common.command_id = req->tag;
+    req->cmd.common.command_id = req->cid;
 
     nvme_stage_admin_prps(req, buffer, buflen);
 
@@ -282,7 +285,7 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
      * with SGL flags masked off; req_flags is OR'd in afterwards so
      * the caller's USERCMD / AER markers survive. */
     nvme_init_request(req, cmd);
-    req->cmd.common.command_id = req->tag;
+    req->cmd.common.command_id = req->cid;
     req->flags |= (enum nvme_req_flags)req_flags;
 
     nvme_stage_admin_prps(req, buffer, buflen);
@@ -358,10 +361,7 @@ static int nvme_submit_abort_sqe(struct NVMeController *ctrl, u16 sqid, u16 cid)
  */
 int nvme_abort_request(struct NVMeController *ctrl, struct nvme_request *req)
 {
-    if (!ctrl || !req || !req->q)
-        return -EINVAL;
-
-    return nvme_submit_abort_sqe(ctrl, req->q->qid, req->tag);
+    return nvme_submit_abort_sqe(ctrl, req->q->qid, req->cid);
 }
 
 /*
@@ -472,6 +472,38 @@ int nvme_configure_timestamp(struct NVMeController *ctrl)
 }
 
 /*
+ * nvme_configure_irq_coalesce - enable NVMe interrupt coalescing (Set
+ * Features 0x08) when configured via the DEVICE_IRQ_COALESCE_* knobs.
+ *
+ * CDW11: bits 7:0 = aggregation threshold (THR, 0-based — the controller
+ * fires after THR+1 completions), bits 15:8 = aggregation time (TIME, in
+ * 100 µs units).  Both knobs 0 (the default) leaves the feature at the
+ * controller default and sends no command — see config.h for the rationale
+ * (matches Linux, which never enables coalescing by default).
+ *
+ * @ctrl: controller to configure
+ * Returns: 0 on success or when disabled, negative errno / NVMe status on error
+ */
+int nvme_configure_irq_coalesce(struct NVMeController *ctrl)
+{
+    const unsigned int time = DEVICE_IRQ_COALESCE_TIME;
+    const unsigned int thr = DEVICE_IRQ_COALESCE_THR;
+
+    if (time == 0 && thr == 0)
+        return 0; /* feature disabled — leave controller default */
+
+    const unsigned int dword11 = ((time & 0xFFu) << 8) | (thr & 0xFFu);
+    int ret = nvme_set_features(ctrl, NVME_FEAT_IRQ_COALESCE, dword11, NULL, 0, NULL);
+    if (ret)
+        Kprintf("[nvme] %s: could not set IRQ coalescing (time=%lu thr=%lu): %ld\n",
+                __func__, (ULONG)time, (ULONG)thr, (LONG)ret);
+    else
+        Kprintf("[nvme] %s: IRQ coalescing on (time=%lu*100us thr=%lu)\n",
+                __func__, (ULONG)time, (ULONG)thr);
+    return ret;
+}
+
+/*
  * nvme_configure_host_options - set the Host Behavior Support feature
  *
  * Enables ACRE (Advanced Command Retry Enable) if the controller reports
@@ -485,7 +517,7 @@ int nvme_configure_timestamp(struct NVMeController *ctrl)
 int nvme_configure_host_options(struct NVMeController *ctrl)
 {
     struct nvme_feat_host_behavior *host;
-    host = pool_zalloc(ctrl->memoryPool, sizeof(*host));
+    host = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN, sizeof(*host));
     if (!host)
         return 0;
 
@@ -500,7 +532,7 @@ int nvme_configure_host_options(struct NVMeController *ctrl)
 
     int ret = nvme_set_features(ctrl, NVME_FEAT_HOST_BEHAVIOR, 0,
                                 host, sizeof(*host), NULL);
-    pool_free(ctrl->memoryPool, host);
+    dma_free(ctrl->dmaPool, host);
     return ret;
 }
 

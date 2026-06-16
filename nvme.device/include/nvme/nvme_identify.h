@@ -17,10 +17,6 @@ struct nvme_ns_ids {
 	u8	csi;
 };
 
-enum nvme_ns_features {
-	NVME_NS_DEAC = 1 << 2,		/* DEAC bit in Write Zeroes supported */
-};
-
 struct nvme_ns {
 	struct MinNode mn_Node;
 
@@ -40,7 +36,6 @@ struct nvme_ns {
 	u64 lbstm;		/* LBA storage-tag mask (ELBAS)			*/
 
 	struct nvme_ns_ids ids;
-	enum nvme_ns_features features;
 
 	struct nvme_effects_log *effects;   /* Stage 8 stub */
 

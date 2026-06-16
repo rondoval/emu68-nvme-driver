@@ -82,7 +82,7 @@ static void fw_slot_info_done(struct nvme_request *req)
 
 out:
 	if (log)
-		pool_free(nc->memoryPool, log);
+		dma_free(nc->dmaPool, log);
 	slab_free(&nc->req_slab, req);
 }
 
@@ -102,7 +102,7 @@ out:
  */
 static void nvme_get_fw_slot_info(struct NVMeController *ctrl)
 {
-	struct nvme_fw_slot_info_log *log = pool_zalloc(ctrl->memoryPool, sizeof(*log));
+	struct nvme_fw_slot_info_log *log = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN, sizeof(*log));
 	if (!log)
 	{
 		Kprintf("[nvme] %s: log alloc failed\n", __func__);
@@ -114,7 +114,7 @@ static void nvme_get_fw_slot_info(struct NVMeController *ctrl)
 	if (ret)
 	{
 		Kprintf("[nvme] %s: async submit failed (%ld)\n", __func__, (LONG)ret);
-		pool_free(ctrl->memoryPool, log);
+		dma_free(ctrl->dmaPool, log);
 	}
 }
 

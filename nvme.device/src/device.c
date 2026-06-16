@@ -152,6 +152,12 @@ static s32 nvme_open_libraries(struct NVMeDevice *base)
     return ERR_NO_ERROR;
 }
 
+/* reset_guard prepare callback (interrupt-safe). */
+static void nvme_device_reset_prepare(APTR user)
+{
+    nvme_reset_quiesce_all(user);
+}
+
 APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *_SysBase asm("a6"))
 {
     (void)_SysBase;
@@ -168,6 +174,10 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
     base->probed = FALSE;
     base->utilityBase = NULL;
     base->pcieBase = NULL;
+
+    if (!reset_guard_install(&base->resetGuard, nvme_device_reset_prepare, base,
+                             (CONST_STRPTR) "nvme.device"))
+        Kprintf("[nvme] %s: reset guard install failed\n", __func__);
 
     return base;
 }
@@ -254,6 +264,14 @@ static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
     if (base->device.dd_Library.lib_OpenCnt > 0)
     {
         base->device.dd_Library.lib_Flags |= LIBF_DELEXP;
+        return 0;
+    }
+
+    /* The ColdReboot vector may have been re-patched on top of our stub —
+     * then the code must stay resident. */
+    if (!reset_guard_remove(&base->resetGuard))
+    {
+        KprintfH("[nvme] %s: reset guard not removable, staying resident\n", __func__);
         return 0;
     }
 

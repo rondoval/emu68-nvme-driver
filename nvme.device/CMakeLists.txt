@@ -78,6 +78,9 @@ target_link_libraries(nvme.device
                            # and nvme_hmb.c's 64-bit ceil-divide for hmmaxd_cap (__udivdi3)
 )
 
+# ROM-able: no writable .data/.bss may sneak in
+emu68_rom_check(nvme.device)
+
 install(
     PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvme.device
     DESTINATION DEVS

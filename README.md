@@ -101,28 +101,28 @@ For RDB-based automount and autoboot handling, the driver uses the
 
 - `CMD_READ`, `CMD_WRITE`, `TD_READ64`, `TD_WRITE64`, and newstyle 64-bit read/write commands
 - `TD_FORMAT` and `TD_FORMAT64` compatibility through the normal write path
+- native `NSCMD_NVME_WRITE_ZEROES` support for controller-backed zero-fill requests
+- native `NSCMD_NVME_TRIM` support for explicit logical-block deallocate requests
 - flush / cache synchronization
-- discard / trim support through `HD_SCSICMD` SCSI UNMAP translation to NVMe Dataset Management
+- discard / trim support through both `NSCMD_NVME_TRIM` and `HD_SCSICMD` SCSI UNMAP translation to NVMe Dataset Management
 - PRP-based data transfer handling, including multi-page transfers
 - internal bounce-buffer staging when the caller's buffer is not directly DMA-safe
 
-The current block path does not expose a distinct AmigaOS primitive for NVMe Write Zeroes. A
-zero-fill request such as `TD_FORMAT` is implemented as a normal NVMe write using a zeroed bounce
-buffer, not as the NVMe Write Zeroes opcode.
 
-Similarly, discard is not exposed as a native trackdisk-style command. It is currently available
-through the SCSI emulation path only: a client issues SCSI UNMAP via `HD_SCSICMD`, and the driver
-translates that into NVMe Dataset Management / Deallocate.
+Discard is not exposed as a standard trackdisk command. Native callers may use the
+private `NSCMD_NVME_TRIM` command from `devices/nvme.h`, where `io_Data` points to an array of
+`struct NVMeTrimRange` entries expressed in logical blocks of the unit's sector size. Callers that
+start from byte ranges should first query `TD_GETGEOMETRY.dg_SectorSize` and convert bytes to LBAs
+and block counts. The current native trim ABI accepts up to 256 ranges per request. Generic
+storage clients can also use the SCSI emulation path: issue SCSI UNMAP via `HD_SCSICMD`, and the
+driver translates that into NVMe Dataset Management / Deallocate.
 
 ### Controller and media diagnostics
 
-- Identify Controller summary and capability decoding via `nvmeadm identify` and `nvmeadm identify caps`
-- SMART / health log reporting via `nvmeadm smart`
-- error-log reporting via `nvmeadm error-log`
-- firmware-slot reporting via `nvmeadm fw-log`
-- changed-namespace log reporting via `nvmeadm changed-ns`
-- device self-test status, start, and abort commands via `nvmeadm self-test ...`
 - admin-command passthrough for userland tooling through `NSCMD_NVME_ADMIN_PASS`
+- drive identity, health (SMART), logs, self-tests, firmware updates, and
+  maintenance are surfaced through the bundled `nvmeadm` tool — see
+  [README-nvmeadm.md](README-nvmeadm.md)
 
 ### Internal controller behavior
 
@@ -158,28 +158,39 @@ controller level, but those namespaces will not be exposed as usable Amiga stora
 
 ---
 
+## Planned features
+
+These are under consideration rather than committed; none is required for the driver to function,
+and there is no fixed timeline:
+
+- **Controller Memory Buffer (CMB) queue placement** — placing the I/O submission queue in
+  controller-side memory.
+- **Shadow Doorbell Buffer** — when the controller advertises Doorbell Buffer Config support
+  (`OACS.DBBUF`), keep shadow doorbell and event-index buffers in host memory so most MMIO
+  doorbell writes (costly on the PiStorm PCIe path) can be elided. Only effective on controllers
+  that support it; `nvmeadm identify` reports whether a given drive does.
+- **`nvmeadm` namespace management** — `create-ns` / `delete-ns` / `attach-ns` / `detach-ns`, so
+  drives can be repartitioned at the namespace level from AmigaOS.
+
+The broader machinery intentionally left out of scope (NVMe over Fabrics, target mode, non-NVM
+command sets) is not on this list and is not planned.
+
+---
+
 ## Included Tools
 
 Two CLI tools are built and installed with the component:
 
-- `nvmeadm` is the main release-facing utility for controller identification, health reporting,
-  logs, and selected safe admin actions.
-- `nvmeinfo` is a lower-level helper and development tool for passthrough-oriented inspection.
+- `nvmeadm` is the release-facing administration and diagnostics utility — drive
+  identification, health reporting, logs, self-tests, firmware updates, and
+  maintenance (format, sanitize). See [README-nvmeadm.md](README-nvmeadm.md) for
+  the full user guide.
+- `nvmeinfo` is a lower-level helper and development tool for passthrough-oriented
+  inspection.
 
-Examples:
-
-```sh
-nvmeadm identify 0
-nvmeadm identify caps 0
-nvmeadm smart 0
-nvmeadm error-log 0
-nvmeadm fw-log 0
-nvmeadm self-test status 0
-```
-
-The exact subcommand surface is intentionally narrower than Linux `nvme-cli`. The goal is to
-provide the most useful local diagnostics first without inventing new driver ABI just for userland
-reporting.
+The `nvmeadm` subcommand surface is intentionally narrower than Linux `nvme-cli`:
+the goal is the most useful local diagnostics first, without inventing new driver
+ABI just for userland reporting.
 
 ---
 
