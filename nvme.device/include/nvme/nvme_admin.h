@@ -59,8 +59,8 @@ int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
  *
  * Stores @done on the request; it runs from drain_cq → nvme_end_req
  * with the CQE already latched in req->status / req->result.  The
- * callback OWNS the request — it must pool_free(req->ac->memoryPool,
- * req) and release any data buffer.
+ * callback OWNS the request — it must free the request (slab_free on
+ * req->ac->req_slab) and release any data buffer.
  *
  * @priv is opaque, recovered as req->priv (typically the data buffer
  * pointer so the callback can free it).  May be NULL.

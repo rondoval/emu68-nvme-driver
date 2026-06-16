@@ -80,7 +80,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
     q->sq_db_off = NVME_REG_DBS + (u32)(2u * qid) * ctrl->db_stride;
     q->cq_db_off = NVME_REG_DBS + (u32)(2u * qid + 1u) * ctrl->db_stride;
 
-    q->sq = dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE, sq_bytes);
+    q->sq = dma_zalloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE, sq_bytes);
     if (!q->sq)
     {
         Kprintf("[nvme] %s: SQ alloc (%lu B) failed\n", __func__, sq_bytes);
@@ -88,7 +88,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
     }
     nvme_cache_flush(q->sq, sq_bytes, TRUE); /* device reads SQ entries */
 
-    q->cq = dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE, cq_bytes);
+    q->cq = dma_zalloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE, cq_bytes);
     if (!q->cq)
     {
         Kprintf("[nvme] %s: CQ alloc (%lu B) failed\n", __func__, cq_bytes);
@@ -98,14 +98,14 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
      * zeroed phase=0 reaches RAM and the dirty lines can't evict over CQEs. */
     nvme_cache_flush(q->cq, cq_bytes, FALSE);
 
-    q->inflight = pool_zalloc(ctrl->memoryPool, inflight_bytes);
+    q->inflight = pool_zalloc(ctrl->metaPool, inflight_bytes);
     if (!q->inflight)
     {
         Kprintf("[nvme] %s: inflight alloc (%lu B) failed\n", __func__, inflight_bytes);
         goto fail_inflight;
     }
 
-    q->free_stack = pool_zalloc(ctrl->memoryPool, (ULONG)depth * sizeof(u16));
+    q->free_stack = pool_zalloc(ctrl->metaPool, (ULONG)depth * sizeof(u16));
     if (!q->free_stack)
     {
         Kprintf("[nvme] %s: free-stack alloc (%lu B) failed\n", __func__,
@@ -123,11 +123,11 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
     return 0;
 
 fail_free_stack:
-    pool_free(ctrl->memoryPool, q->inflight);
+    pool_free(ctrl->metaPool, q->inflight);
 fail_inflight:
-    dma_free(ctrl->memoryPool, q->cq);
+    dma_free(ctrl->dmaPool, q->cq);
 fail_cq:
-    dma_free(ctrl->memoryPool, q->sq);
+    dma_free(ctrl->dmaPool, q->sq);
 fail_sq:
     mem_zero(q, sizeof(*q));
     return -1;
@@ -149,15 +149,14 @@ void nvme_teardown_queue(struct nvme_queue *q)
 
     if (q->ctrl)
     {
-        APTR pool = q->ctrl->memoryPool;
         if (q->sq)
-            dma_free(pool, q->sq);
+            dma_free(q->ctrl->dmaPool, q->sq);
         if (q->cq)
-            dma_free(pool, q->cq);
+            dma_free(q->ctrl->dmaPool, q->cq);
         if (q->inflight)
-            pool_free(pool, q->inflight);
+            pool_free(q->ctrl->metaPool, q->inflight);
         if (q->free_stack)
-            pool_free(pool, q->free_stack);
+            pool_free(q->ctrl->metaPool, q->free_stack);
     }
 
     mem_zero(q, sizeof(*q));

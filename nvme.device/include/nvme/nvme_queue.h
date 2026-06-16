@@ -36,7 +36,7 @@ struct nvme_queue
                                          * bits.  Set at setup; read by
                                          * nvme_inflight_release.            */
 
-    /* SQ ring (page-aligned, dma_alloc'd from ctrl->memoryPool). */
+    /* SQ ring (page-aligned, dma_alloc'd from ctrl->dmaPool). */
     struct nvme_command    *sq;
     u16                     sq_tail;
     u16                     last_sq_tail;   /* sq_tail at the last doorbell write;
@@ -48,7 +48,7 @@ struct nvme_queue
                                              * nvme_sq_batch_end commits it once.  */
     u32                     sq_db_off;  /* BAR0 offset of SQ-tail doorbell   */
 
-    /* CQ ring (page-aligned, dma_alloc'd from ctrl->memoryPool). */
+    /* CQ ring (page-aligned, dma_alloc'd from ctrl->dmaPool). */
     struct nvme_completion *cq;
     u16                     cq_head;
     u8                      cq_phase;   /* expected phase bit (1 → 0 → 1 …)  */

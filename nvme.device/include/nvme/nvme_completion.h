@@ -12,7 +12,7 @@ struct IOStdReq;
 /*
  * Parent struct for a single Amiga BeginIO whose payload is larger than
  * the controller MDTS and is therefore split across multiple sibling
- * nvme_request commands.  Pool-allocated from ctrl->memoryPool by
+ * nvme_request commands.  Allocated from ctrl->ctx_slab by
  * nvme_io_submit_rw alongside the first child(ren); freed by
  * nvme_complete_rq once @inflight drops to zero and the originating
  * IOStdReq has been ReplyMsg'd.
@@ -81,7 +81,7 @@ enum nvme_req_flags
 
 /*
  * In-flight NVMe command descriptor.  One per outstanding SQ entry.
- * Pool-allocated from ctrl->memoryPool.
+ * Allocated from ctrl->req_slab.
  *
  * cid is the encoded command_id (gen<<12 | tag); its low 12 bits are the
  * per-queue slot index (0..req->q->depth-1) and req->q->inflight[tag] points

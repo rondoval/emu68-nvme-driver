@@ -104,7 +104,7 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
      * page-offset of every list entry must be 0).  AllocMem returns
      * 4-byte aligned memory, so use dma_alloc with align=4 KiB to
      * guarantee page alignment.  The pool comes from the owning
-     * controller (req->ac->memoryPool was set by the I/O dispatch
+     * controller (req->ac->dmaPool was set by the I/O dispatch
      * caller in ProcessCommand). */
     for (u32 page_idx = 0; page_idx < nr_data_pages; page_idx++)
     {
@@ -317,12 +317,12 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
 
     void *dma_buf = buffer;
 
-    if (buffer && bytes && nvme_needs_bounce(buffer))
+    if (buffer && bytes && nvme_needs_bounce(&req->ac->dma_ctx, buffer, bytes))
     {
         /* Allocate a Fast-RAM bounce.  Write commands need user data
          * copied in before submit; read commands fill the bounce and
          * cleanup_cmd copies it back. */
-        APTR b = dma_alloc(req->ac->memoryPool, DMA_ALIGN_MIN, bytes);
+        APTR b = dma_alloc(req->ac->dmaPool, DMA_ALIGN_MIN, bytes);
         if (!b)
         {
             Kprintf("[nvme] %s: bounce alloc (%lu bytes) failed\n",
@@ -380,7 +380,7 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
  */
 static void nvme_req_free_dma_buffers(struct nvme_request *req)
 {
-    APTR pool = req->ac ? req->ac->memoryPool : NULL;
+    struct dma_pool *pool = req->ac ? req->ac->dmaPool : NULL;
 
     if (req->flags & NVME_REQ_PRP_LIST)
     {
@@ -962,7 +962,7 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
      * contiguous user buffer in ONE call here instead of once per 128 KB chunk.
      * Siblings then skip their per-chunk data flush, and the post-DMA invalidate
      * is done once in nvme_io_context_finish. */
-    if (!nvme_needs_bounce(buffer))
+    if (!nvme_needs_bounce(&ctrl->dma_ctx, buffer, (ULONG)bytes))
     {
         nvme_cache_flush(buffer, (ULONG)bytes, opcode == nvme_cmd_write);
         ctx->data_precached = 1;
@@ -1034,7 +1034,7 @@ BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
     if (ctrl->quirks & NVME_QUIRK_DEALLOCATE_ZEROES)
     {
         struct nvme_dsm_range *ranges =
-            dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE,
+            dma_zalloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE,
                        sizeof(*ranges) * NVME_DSM_MAX_RANGES);
         if (!ranges)
             return IOERR_SELFTEST;
@@ -1106,19 +1106,19 @@ BYTE nvme_io_submit_dsm(struct NVMeUnit *unit, struct IOStdReq *io,
     struct nvme_request *req = nvme_req_alloc_io(unit, io, &err);
     if (!req)
     {
-        dma_free(unit->ctrl->memoryPool, ranges);
+        dma_free(unit->ctrl->dmaPool, ranges);
         return err;
     }
 
     if (unlikely(!nvme_check_ready(unit->ctrl)))
     {
-        dma_free(unit->ctrl->memoryPool, ranges);
+        dma_free(unit->ctrl->dmaPool, ranges);
         return nvme_fail_nonready_command(req);
     }
 
     if (nvme_setup_dsm(req, ranges, nr) != 0)
     {
-        dma_free(unit->ctrl->memoryPool, ranges);
+        dma_free(unit->ctrl->dmaPool, ranges);
         nvme_req_destroy(req);
         return IOERR_SELFTEST;
     }

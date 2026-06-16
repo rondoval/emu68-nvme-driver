@@ -20,10 +20,10 @@
 static inline LONG post_abort_request(struct NVMeUnit *unit, struct IOStdReq *io)
 {
     struct NVMeController *ctrl = unit->ctrl;
-    if (!ctrl || !ctrl->memoryPool)
+    if (!ctrl || !ctrl->metaPool)
         return -1;
 
-    struct IOStdReq *abort_req = pool_zalloc(ctrl->memoryPool, sizeof(*abort_req));
+    struct IOStdReq *abort_req = pool_zalloc(ctrl->metaPool, sizeof(*abort_req));
     if (!abort_req)
         return -1;
 

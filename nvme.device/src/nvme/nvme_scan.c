@@ -190,7 +190,7 @@ static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info
 		ctrl->quirks |= NVME_QUIRK_BOGUS_NID;
 	}
 
-	struct nvme_ns *ns = pool_zalloc(ctrl->memoryPool, sizeof(*ns));
+	struct nvme_ns *ns = pool_zalloc(ctrl->metaPool, sizeof(*ns));
 	if (!ns)
 		return;
 
@@ -243,7 +243,7 @@ static void nvme_ns_remove(struct nvme_ns *ns)
 	}
 
 	Remove((struct Node *)&ns->mn_Node);
-	pool_free(ns->ctrl->memoryPool, ns);
+	pool_free(ns->ctrl->metaPool, ns);
 }
 
 /*
@@ -360,7 +360,7 @@ static int nvme_scan_ns_list(struct NVMeController *ctrl)
 	const int nr_entries = NVME_IDENTIFY_DATA_SIZE / sizeof(__le32);
 	int ret = 0;
 
-	__le32 *ns_list = pool_zalloc(ctrl->memoryPool, NVME_IDENTIFY_DATA_SIZE);
+	__le32 *ns_list = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN, NVME_IDENTIFY_DATA_SIZE);
 	if (!ns_list)
 		return -ENOMEM;
 
@@ -396,7 +396,7 @@ static int nvme_scan_ns_list(struct NVMeController *ctrl)
 out:
 	nvme_remove_invalid_namespaces(ctrl, prev);
 free:
-	pool_free(ctrl->memoryPool, ns_list);
+	dma_free(ctrl->dmaPool, ns_list);
 	return ret;
 }
 
@@ -417,7 +417,7 @@ static void nvme_scan_ns_sequential(struct NVMeController *ctrl)
 	if (nvme_identify_ctrl(ctrl, &id))
 		return;
 	u32 nn = le32(id->nn);
-	pool_free(ctrl->memoryPool, id);
+	dma_free(ctrl->dmaPool, id);
 
 	for (u32 i = 1; i <= nn; i++)
 		nvme_scan_ns(ctrl, i);
@@ -440,7 +440,7 @@ static void nvme_clear_changed_ns_log(struct NVMeController *ctrl)
 	size_t log_size = NVME_MAX_CHANGED_NAMESPACES * sizeof(__le32);
 	int error;
 
-	__le32 *log = pool_zalloc(ctrl->memoryPool, log_size);
+	__le32 *log = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN, log_size);
 	if (!log)
 		return;
 
@@ -455,7 +455,7 @@ static void nvme_clear_changed_ns_log(struct NVMeController *ctrl)
 	if (error)
 		Kprintf("[nvme] %s: reading changed ns log failed: %ld\n", __func__, error);
 
-	pool_free(ctrl->memoryPool, log);
+	dma_free(ctrl->dmaPool, log);
 }
 
 /*

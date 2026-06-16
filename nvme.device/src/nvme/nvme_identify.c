@@ -32,14 +32,14 @@
 static int nvme_submit_identify(struct NVMeController *ctrl,
 								struct nvme_command *c, u32 len, void **out)
 {
-	void *buf = pool_zalloc(ctrl->memoryPool, len);
+	void *buf = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN, len);
 	if (!buf)
 		return -ENOMEM;
 
 	int ret = nvme_submit_sync_cmd(ctrl, c, NULL, buf, len);
 	if (ret)
 	{
-		pool_free(ctrl->memoryPool, buf);
+		dma_free(ctrl->dmaPool, buf);
 		return ret;
 	}
 
@@ -221,7 +221,7 @@ static int nvme_identify_ns_descs(struct NVMeController *ctrl,
 		status = -EINVAL;
 	}
 
-	pool_free(ctrl->memoryPool, data);
+	dma_free(ctrl->dmaPool, data);
 	return status;
 }
 
@@ -288,7 +288,7 @@ static int nvme_identify_ns_nvm(struct NVMeController *ctrl, unsigned nsid,
 	info->pic = nvm->pic;
 	info->lbstm = le64(nvm->lbstm);
 
-	pool_free(ctrl->memoryPool, nvm);
+	dma_free(ctrl->dmaPool, nvm);
 	return 0;
 }
 
@@ -362,7 +362,7 @@ static int nvme_ns_info_from_identify(struct NVMeController *ctrl,
 	}
 
 error:
-	pool_free(ctrl->memoryPool, id);
+	dma_free(ctrl->dmaPool, id);
 	return ret;
 }
 
@@ -401,7 +401,7 @@ static int nvme_ns_info_from_id_cs_indep(struct NVMeController *ctrl,
 	info->no_vwc = id->nsfeat & NVME_NS_VWC_NOT_PRESENT;
 	info->endgid = le16(id->endgid);
 
-	pool_free(ctrl->memoryPool, id);
+	dma_free(ctrl->dmaPool, id);
 	return 0;
 }
 

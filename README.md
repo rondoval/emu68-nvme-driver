@@ -161,6 +161,25 @@ controller level, but those namespaces will not be exposed as usable Amiga stora
 
 ---
 
+## Planned features
+
+These are under consideration rather than committed; none is required for the driver to function,
+and there is no fixed timeline:
+
+- **Controller Memory Buffer (CMB) queue placement** — placing the I/O submission queue in
+  controller-side memory.
+- **Shadow Doorbell Buffer** — when the controller advertises Doorbell Buffer Config support
+  (`OACS.DBBUF`), keep shadow doorbell and event-index buffers in host memory so most MMIO
+  doorbell writes (costly on the PiStorm PCIe path) can be elided. Only effective on controllers
+  that support it; `nvmeadm identify` reports whether a given drive does.
+- **`nvmeadm` namespace management** — `create-ns` / `delete-ns` / `attach-ns` / `detach-ns`, so
+  drives can be repartitioned at the namespace level from AmigaOS.
+
+The broader machinery intentionally left out of scope (NVMe over Fabrics, target mode, non-NVM
+command sets) is not on this list and is not planned.
+
+---
+
 ## Included Tools
 
 Two CLI tools are built and installed with the component:

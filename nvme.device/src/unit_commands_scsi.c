@@ -792,7 +792,7 @@ static BYTE scsi_unmap(struct NVMeUnit *unit, struct IOStdReq *io)
      * ownership unconditionally — we must not touch @ranges after the
      * call, including on the err != ASYNC path. */
     struct nvme_dsm_range *ranges =
-        dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE,
+        dma_zalloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE,
                    sizeof(*ranges) * NVME_DSM_MAX_RANGES);
     if (!ranges)
     {
@@ -812,7 +812,7 @@ static BYTE scsi_unmap(struct NVMeUnit *unit, struct IOStdReq *io)
             Kprintf("[nvme] %s: range[%lu] LBA 0x%08lx%08lx + %lu blocks exceeds disk\n",
                     __func__, (ULONG)i,
                     (ULONG)(slba >> 32), (ULONG)slba, blocks);
-            dma_free(ctrl->memoryPool, ranges);
+            dma_free(ctrl->dmaPool, ranges);
             scsi_make_sense(cmd, 0, 0, IOERR_BADADDRESS);
             return IOERR_BADADDRESS;
         }

@@ -212,6 +212,24 @@ per action where the drive reports them.
 
 ---
 
+## Planned
+
+Under consideration, not yet available:
+
+- **Namespace management** — `create-ns`, `delete-ns`, `attach-ns`, and
+  `detach-ns` to repartition a drive at the namespace level. Deferred behind a
+  design decision (how to target a namespace by ID, given every other command
+  works on the opened unit's own namespace) and validation on real
+  multi-namespace hardware. `delete-ns` will be destructive and gated by
+  `CONFIRM` like `format` and `sanitize`.
+
+`set-feature` and any other write-capable feature commands remain deliberately
+excluded for now. I/O passthrough, metadata transfers, large telemetry dumps,
+Security Send/Receive, and reservations are out of scope for this tool, not
+planned work.
+
+---
+
 ## Troubleshooting
 
 - `OpenDevice(nvme.device,N) failed` — the unit does not exist; run

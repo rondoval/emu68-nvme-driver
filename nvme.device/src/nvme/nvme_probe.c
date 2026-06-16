@@ -373,10 +373,23 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
     if (ret != ERR_NO_ERROR)
         return ret;
 
-    ctrl->memoryPool = CreatePool(MEMF_FAST | MEMF_PUBLIC, 256 * 1024, 8192);
-    if (!ctrl->memoryPool)
+    /* DMA buffers must live in Emu68 (Pi-DRAM) RAM the PCIe engine can reach, so the
+     * DMA pool is region-restricted; with no device tree there is no reachable region
+     * and we refuse to attach.  CPU-only metadata uses a separate ordinary Exec pool. */
+    dma_mem_init(&ctrl->dma_ctx);
+    ctrl->dmaPool = dma_pool_create(&ctrl->dma_ctx);
+    ctrl->metaPool = CreatePool(MEMF_FAST | MEMF_PUBLIC, 256 * 1024, 8192);
+    if (!ctrl->dmaPool || !ctrl->metaPool)
     {
-        Kprintf("[nvme] %s: pool alloc failed\n", __func__);
+        Kprintf("[nvme] %s: pool alloc failed (dma=%lx meta=%lx)\n", __func__,
+                (ULONG)ctrl->dmaPool, (ULONG)ctrl->metaPool);
+        dma_pool_delete(ctrl->dmaPool);
+        ctrl->dmaPool = NULL;
+        if (ctrl->metaPool)
+        {
+            DeletePool(ctrl->metaPool);
+            ctrl->metaPool = NULL;
+        }
         ret = ERR_ALLOC_ERROR;
         goto fail_hw;
     }
@@ -396,13 +409,13 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
      *   prp_small_slab — 64 per grow (256 B; the common ≤128 KiB transfer).
      * The small pool is 256 B / 32 entries (Linux's prp_small_pool); its
      * alignment is bumped to 512 B under NVME_QUIRK_DMAPOOL_ALIGN_512. */
-    slab_cache_init(&ctrl->req_slab, ctrl->memoryPool,
+    slab_cache_init(&ctrl->req_slab, ctrl->metaPool, NULL,
                     sizeof(struct nvme_request), 0, 64);
-    slab_cache_init(&ctrl->ctx_slab, ctrl->memoryPool,
+    slab_cache_init(&ctrl->ctx_slab, ctrl->metaPool, NULL,
                     sizeof(struct nvme_io_context), 0, 16);
-    slab_cache_init(&ctrl->prp_large_slab, ctrl->memoryPool,
+    slab_cache_init(&ctrl->prp_large_slab, ctrl->metaPool, ctrl->dmaPool,
                     NVME_CTRL_PAGE_SIZE, NVME_CTRL_PAGE_SIZE, 16);
-    slab_cache_init(&ctrl->prp_small_slab, ctrl->memoryPool,
+    slab_cache_init(&ctrl->prp_small_slab, ctrl->metaPool, ctrl->dmaPool,
                     NVME_SMALL_POOL_SIZE,
                     (ctrl->quirks & NVME_QUIRK_DMAPOOL_ALIGN_512) ? 512u
                                                                   : NVME_SMALL_POOL_SIZE,
@@ -519,8 +532,10 @@ fail_pool:
     slab_cache_destroy(&ctrl->prp_large_slab);
     slab_cache_destroy(&ctrl->ctx_slab);
     slab_cache_destroy(&ctrl->req_slab);
-    DeletePool(ctrl->memoryPool);
-    ctrl->memoryPool = NULL;
+    dma_pool_delete(ctrl->dmaPool);
+    ctrl->dmaPool = NULL;
+    DeletePool(ctrl->metaPool);
+    ctrl->metaPool = NULL;
 fail_hw:
     hw_shutdown(ctrl);
     return ret;
@@ -530,7 +545,7 @@ fail_hw:
  * nvme_alloc_nvmeunit - callback fired by core.c::nvme_alloc_ns for
  * each newly-discovered NSID during scan.
  *
- * Allocates a fresh NVMeUnit from the controller's memoryPool, fills
+ * Allocates a fresh NVMeUnit from the controller's metaPool, fills
  * in geometry, and AddTails to base->units with the next free unit
  * number.  The Amiga unit number is monotonically increasing across
  * all controllers.
@@ -543,7 +558,7 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
 {
     struct NVMeDevice *base = ctrl->device;
 
-    struct NVMeUnit *unit = pool_zalloc(ctrl->memoryPool, sizeof(*unit));
+    struct NVMeUnit *unit = pool_zalloc(ctrl->metaPool, sizeof(*unit));
     if (!unit)
     {
         Kprintf("[nvme] %s: NVMeUnit alloc failed (nsid=%lu)\n", __func__, (ULONG)nsid);
@@ -701,8 +716,8 @@ static void nvme_ctrl_shutdown(struct NVMeController *ctrl)
  *
  * Called from device expunge.  For each controller: clean-shutdown
  * the device (CC.SHN=normal), tear down queues, stop the task,
- * release PCIe ownership, delete the memory pool.  Every NVMeUnit
- * allocated by nvme_alloc_nvmeunit lives in ctrl->memoryPool and
+ * release PCIe ownership, delete the memory pools.  Every NVMeUnit
+ * allocated by nvme_alloc_nvmeunit lives in ctrl->metaPool and
  * is freed implicitly when DeletePool runs — so we don't touch
  * base->units explicitly.
  */
@@ -734,19 +749,25 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         task_join(&ctrl->admin_task);
         task_join(&ctrl->unit_task);
         hw_shutdown(ctrl);
-        if (ctrl->memoryPool)
+
+        if (ctrl->effects)
         {
-            if (ctrl->effects)
-            {
-                pool_free(ctrl->memoryPool, ctrl->effects);
-                ctrl->effects = NULL;
-            }
-            slab_cache_destroy(&ctrl->prp_small_slab);
-            slab_cache_destroy(&ctrl->prp_large_slab);
-            slab_cache_destroy(&ctrl->ctx_slab);
-            slab_cache_destroy(&ctrl->req_slab);
-            DeletePool(ctrl->memoryPool);
-            ctrl->memoryPool = NULL;
+            dma_free(ctrl->dmaPool, ctrl->effects);
+            ctrl->effects = NULL;
+        }
+        slab_cache_destroy(&ctrl->prp_small_slab);
+        slab_cache_destroy(&ctrl->prp_large_slab);
+        slab_cache_destroy(&ctrl->ctx_slab);
+        slab_cache_destroy(&ctrl->req_slab);
+        if (ctrl->dmaPool)
+        {
+            dma_pool_delete(ctrl->dmaPool);
+            ctrl->dmaPool = NULL;
+        }
+        if (ctrl->metaPool)
+        {
+            DeletePool(ctrl->metaPool);
+            ctrl->metaPool = NULL;
         }
     }
 

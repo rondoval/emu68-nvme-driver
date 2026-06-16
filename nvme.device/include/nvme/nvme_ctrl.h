@@ -4,6 +4,7 @@
 
 #include <nvme/nvme_core.h>	 /* foundation types, nvme_defs.h (enum nvme_ctrl_type, NVME_CC_*) */
 #include <nvme/nvme_queue.h> /* struct nvme_queue embedded in NVMeController */
+#include <dma_mem.h>		 /* struct dma_mem_ctx, region DMA pool */
 
 /* Device/unit framework types live in device.h; referenced here by pointer. */
 struct NVMeDevice;
@@ -287,7 +288,9 @@ struct NVMeController
 	struct MsgPort *adminPort; /* Passthrough and admin-only request port. */
 
 	/* Shared allocation state. */
-	APTR memoryPool; /* Shared pool backing pool_* and dma_* allocations. */
+	struct dma_mem_ctx dma_ctx; /* Emu68 (DMA-reachable) RAM regions; backs dmaPool */
+	struct dma_pool *dmaPool;	/* region-restricted DMA pool (Emu68 RAM) for DMA buffers */
+	APTR metaPool;				/* ordinary Exec pool for CPU-only metadata */
 	struct slab_cache req_slab; /* Slab cache for struct nvme_request objects. */
 	struct slab_cache ctx_slab; /* Slab cache for struct nvme_io_context objects. */
 	struct slab_cache prp_large_slab; /* Slab cache for 4 KiB PRP-list pages (chained / >32-entry lists). */

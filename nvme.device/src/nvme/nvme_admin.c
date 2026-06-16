@@ -517,7 +517,7 @@ int nvme_configure_irq_coalesce(struct NVMeController *ctrl)
 int nvme_configure_host_options(struct NVMeController *ctrl)
 {
     struct nvme_feat_host_behavior *host;
-    host = pool_zalloc(ctrl->memoryPool, sizeof(*host));
+    host = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN, sizeof(*host));
     if (!host)
         return 0;
 
@@ -532,7 +532,7 @@ int nvme_configure_host_options(struct NVMeController *ctrl)
 
     int ret = nvme_set_features(ctrl, NVME_FEAT_HOST_BEHAVIOR, 0,
                                 host, sizeof(*host), NULL);
-    pool_free(ctrl->memoryPool, host);
+    dma_free(ctrl->dmaPool, host);
     return ret;
 }
 

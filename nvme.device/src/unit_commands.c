@@ -177,7 +177,7 @@ void ProcessCommand(struct IOStdReq *io)
         }
 
         struct nvme_dsm_range *ranges =
-            dma_zalloc(ctrl->memoryPool, NVME_CTRL_PAGE_SIZE,
+            dma_zalloc(ctrl->dmaPool, NVME_CTRL_PAGE_SIZE,
                        sizeof(*ranges) * NVME_DSM_MAX_RANGES);
         if (!ranges)
         {
@@ -205,7 +205,7 @@ void ProcessCommand(struct IOStdReq *io)
         }
         if (rerr)
         {
-            dma_free(ctrl->memoryPool, ranges);
+            dma_free(ctrl->dmaPool, ranges);
             reply_io(io, rerr);
             break;
         }
@@ -248,8 +248,8 @@ void ProcessCommand(struct IOStdReq *io)
         if (unit && unit->ctrl)
         {
             (void)nvme_io_abort(unit->ctrl, target);
-            if (unit->ctrl->memoryPool)
-                pool_free(unit->ctrl->memoryPool, io);
+            if (unit->ctrl->metaPool)
+                pool_free(unit->ctrl->metaPool, io);
         }
         /* Internal request: no ReplyMsg. */
         break;

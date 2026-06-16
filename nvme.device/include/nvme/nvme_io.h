@@ -3,6 +3,7 @@
 #define NVME_IO_H
 
 #include <nvme/nvme_core.h>     /* BOOL, u64, ULONG, u8 */
+#include <dma_mem.h>            /* struct dma_mem_ctx, dma_addr_reachable */
 
 struct nvme_dsm_range;
 struct nvme_io_context;
@@ -102,25 +103,23 @@ BYTE nvme_submit_io(struct nvme_request *req);
 void nvme_cleanup_cmd(struct nvme_request *req);
 
 /*
- * nvme_needs_bounce - true if @buffer can't be DMA'd directly.
+ * nvme_needs_bounce - true if [@buffer, @buffer+@len) can't be DMA'd directly.
  *
- * Bounces buffers PCIe cannot reach (Amiga Chip RAM, first 2 MiB under
- * PiStorm) and buffers that aren't cache-line aligned.  The latter is
- * stricter than the NVMe spec §4.1.2 PRP1 Dword rule on purpose: a read
- * (device writes RAM) into a buffer whose start isn't 64-byte aligned shares
- * its first/last cache line with neighbouring data, and the post-DMA
- * invalidate would drop a concurrent write to that neighbour.  Block lengths
- * are always a sector multiple (≥512 ⇒ 64-multiple), so a 64-aligned start is
- * enough to make the maintained range whole cache lines.  See the
- * 68040.library CachePreDMA/PostDMA contract.
+ * Bounces buffers PCIe cannot reach (Amiga Chip RAM and any Zorro/accelerator
+ * Fast RAM — only Emu68 Pi-DRAM is reachable; see dma_addr_reachable()) and
+ * buffers that aren't cache-line aligned.  The latter is stricter than the NVMe
+ * spec §4.1.2 PRP1 Dword rule on purpose: a read (device writes RAM) into a
+ * buffer whose start isn't 64-byte aligned shares its first/last cache line with
+ * neighbouring data, and the post-DMA invalidate would drop a concurrent write to
+ * that neighbour.  Block lengths are always a sector multiple (≥512 ⇒ 64-multiple),
+ * so a 64-aligned start is enough to make the maintained range whole cache lines.
+ * See the 68040.library CachePreDMA/PostDMA contract.
  */
-static inline BOOL nvme_needs_bounce(const void *buffer)
+static inline BOOL nvme_needs_bounce(struct dma_mem_ctx *ctx, const void *buffer, ULONG len)
 {
-    ULONG addr = (ULONG)buffer;
-
-    if (addr <= 0x1FFFFFu)
-        return TRUE;          /* Chip RAM — PCIe DMA cannot reach */
-    if (addr & DMA_ALIGN_MIN_MASK)
+    if (!dma_addr_reachable(ctx, (APTR)buffer, len))
+        return TRUE;          /* unreachable by PCIe DMA (Chip / Zorro / accel RAM) */
+    if ((ULONG)buffer & DMA_ALIGN_MIN_MASK)
         return TRUE;          /* not cache-line aligned — would share boundary lines */
     return FALSE;
 }

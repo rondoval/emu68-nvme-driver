@@ -197,7 +197,7 @@ static int nvme_init_effects_log(struct NVMeController *ctrl,
 {
 	(void)csi;
 
-	struct nvme_effects_log *effects = pool_zalloc(ctrl->memoryPool,
+	struct nvme_effects_log *effects = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN,
 			sizeof(*effects));
 	if (!effects)
 		return -ENOMEM;
@@ -266,7 +266,7 @@ static void nvme_init_known_nvm_effects(struct NVMeController *ctrl)
 static int nvme_get_effects_log(struct NVMeController *ctrl, u8 csi,
 				struct nvme_effects_log **log)
 {
-	struct nvme_effects_log *cel = pool_zalloc(ctrl->memoryPool,
+	struct nvme_effects_log *cel = dma_zalloc(ctrl->dmaPool, DMA_ALIGN_MIN,
 			sizeof(*cel));
 	if (!cel)
 		return -ENOMEM;
@@ -274,7 +274,7 @@ static int nvme_get_effects_log(struct NVMeController *ctrl, u8 csi,
 	int ret = nvme_get_log(ctrl, 0x00, NVME_LOG_CMD_EFFECTS, 0, csi,
 			cel, sizeof(*cel), 0, NULL, NULL);
 	if (ret) {
-		pool_free(ctrl->memoryPool, cel);
+		dma_free(ctrl->dmaPool, cel);
 		return ret;
 	}
 
@@ -442,7 +442,7 @@ int nvme_init_identify(struct NVMeController *ctrl)
 	ctrl->hmmaxd = le16(id->hmmaxd);
 
 out_free:
-	pool_free(ctrl->memoryPool, id);
+	dma_free(ctrl->dmaPool, id);
 	return ret;
 }
 
@@ -491,6 +491,6 @@ int nvme_init_non_mdts_limits(struct NVMeController *ctrl)
 	if (id->wzsl)
 		ctrl->max_zeroes_sectors = nvme_mps_to_sectors(ctrl, id->wzsl);
 
-	pool_free(ctrl->memoryPool, id);
+	dma_free(ctrl->dmaPool, id);
 	return 0;
 }

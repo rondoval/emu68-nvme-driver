@@ -211,9 +211,9 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
      * non-64 length still shares its tail cache line — bounce that case too
      * (the bounce is cache-line aligned and dma_alloc pads its size). */
     if (dma_buf && uc->pt_DataLen &&
-        (nvme_needs_bounce(dma_buf) || (uc->pt_DataLen & DMA_ALIGN_MIN_MASK)))
+        (nvme_needs_bounce(&ctrl->dma_ctx, dma_buf, uc->pt_DataLen) || (uc->pt_DataLen & DMA_ALIGN_MIN_MASK)))
     {
-        bounce = dma_alloc(ctrl->memoryPool, DMA_ALIGN_MIN, uc->pt_DataLen);
+        bounce = dma_alloc(ctrl->dmaPool, DMA_ALIGN_MIN, uc->pt_DataLen);
         if (!bounce)
         {
             Kprintf("[nvme] passthru: bounce alloc (%lu B) failed\n",
@@ -264,7 +264,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     if (bounce)
     {
         CopyMem(bounce, uc->pt_Addr, uc->pt_DataLen);
-        dma_free(ctrl->memoryPool, bounce);
+        dma_free(ctrl->dmaPool, bounce);
     }
 
     /* Report results.  pt_Result always carries the CQE DW0.  io_Error
