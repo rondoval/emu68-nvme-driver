@@ -109,7 +109,7 @@ For RDB-based automount and autoboot handling, the driver uses the
 - internal bounce-buffer staging when the caller's buffer is not directly DMA-safe
 
 
-Similarly, discard is not exposed as a standard trackdisk command. Native callers may use the
+Discard is not exposed as a standard trackdisk command. Native callers may use the
 private `NSCMD_NVME_TRIM` command from `devices/nvme.h`, where `io_Data` points to an array of
 `struct NVMeTrimRange` entries expressed in logical blocks of the unit's sector size. Callers that
 start from byte ranges should first query `TD_GETGEOMETRY.dg_SectorSize` and convert bytes to LBAs
@@ -119,13 +119,10 @@ driver translates that into NVMe Dataset Management / Deallocate.
 
 ### Controller and media diagnostics
 
-- Identify Controller summary and capability decoding via `nvmeadm identify` and `nvmeadm identify caps`
-- SMART / health log reporting via `nvmeadm smart`
-- error-log reporting via `nvmeadm error-log`
-- firmware-slot reporting via `nvmeadm fw-log`
-- changed-namespace log reporting via `nvmeadm changed-ns`
-- device self-test status, start, and abort commands via `nvmeadm self-test ...`
 - admin-command passthrough for userland tooling through `NSCMD_NVME_ADMIN_PASS`
+- drive identity, health (SMART), logs, self-tests, firmware updates, and
+  maintenance are surfaced through the bundled `nvmeadm` tool — see
+  [README-nvmeadm.md](README-nvmeadm.md)
 
 ### Internal controller behavior
 
@@ -184,25 +181,16 @@ command sets) is not on this list and is not planned.
 
 Two CLI tools are built and installed with the component:
 
-- `nvmeadm` is the main release-facing utility for drive identification, health reporting, logs,
-  self-tests, firmware updates, and maintenance (format, sanitize). See
-  [README-nvmeadm.md](README-nvmeadm.md) for the full user guide.
-- `nvmeinfo` is a lower-level helper and development tool for passthrough-oriented inspection.
+- `nvmeadm` is the release-facing administration and diagnostics utility — drive
+  identification, health reporting, logs, self-tests, firmware updates, and
+  maintenance (format, sanitize). See [README-nvmeadm.md](README-nvmeadm.md) for
+  the full user guide.
+- `nvmeinfo` is a lower-level helper and development tool for passthrough-oriented
+  inspection.
 
-Examples:
-
-```sh
-nvmeadm units
-nvmeadm identify
-nvmeadm identify caps
-nvmeadm smart UNIT 1
-nvmeadm error-log
-nvmeadm self-test status
-```
-
-The exact subcommand surface is intentionally narrower than Linux `nvme-cli`. The goal is to
-provide the most useful local diagnostics first without inventing new driver ABI just for userland
-reporting.
+The `nvmeadm` subcommand surface is intentionally narrower than Linux `nvme-cli`:
+the goal is the most useful local diagnostics first, without inventing new driver
+ABI just for userland reporting.
 
 ---
 

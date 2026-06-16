@@ -137,6 +137,11 @@ Firmware update is a two-step process; nothing takes effect until the
 image is committed, and most drives additionally require a reset (usually
 a reboot) afterwards.
 
+> Warning: the firmware-update commands (`fw-download` and `fw-activate`)
+> have **not been tested against real hardware** yet. Treat them as
+> experimental, and have a recovery plan before committing firmware to a
+> drive.
+
 ### `nvmeadm fw-download FILE <path> [UNIT <n>] CONFIRM`
 
 Transfers a firmware image file to the drive in chunks. The file size must
