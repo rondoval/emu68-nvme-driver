@@ -25,6 +25,9 @@
  */
 s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
 {
+#ifndef DEBUG
+    (void)unitNumber; /* only referenced by debug logging */
+#endif
     struct NVMeController *ctrl = unit->ctrl;
 
     KprintfH("[nvme] UnitOpen: unit=%lx unitNumber=%ld nsid=%lu flags=0x%lx ctrl=%lx\n",

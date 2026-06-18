@@ -212,6 +212,8 @@ From the superbuild root, the usual validation target is:
 cmake --build build --target emu68-nvme-driver
 ```
 
+Debug backend: append `-DEMU68_DEBUG_BACKEND=serial` (default `pistorm` | `serial` | `off`) — selected stack-wide via `emu68-common`. `pistorm` writes to the Emu68 `0xdeadbeef` debug hook; `serial` routes to the AmigaOS serial console (`debug.lib`, not ROM-able); `off` compiles debug out.
+
 The install step places `nvme.device` in `DEVS:` and the utilities in `C:` inside the install
 tree produced by the driver stack.
 

@@ -110,7 +110,9 @@ int nvme_identify_ctrl_nvm(struct NVMeController *ctrl, struct nvme_id_ctrl_nvm 
 static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids *ids,
 								struct nvme_ns_id_desc *cur, BOOL *csi_seen)
 {
+#ifdef DEBUG
 	const char *warn_str = "ctrl returned bogus length:";
+#endif
 	void *data = cur;
 
 	switch (cur->nidt)

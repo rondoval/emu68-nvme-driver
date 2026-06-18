@@ -119,6 +119,9 @@ static void hw_shutdown(struct NVMeController *ctrl)
 static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
                            u32 timeout, const char *op)
 {
+#ifndef DEBUG
+    (void)op; /* only referenced by debug logging */
+#endif
     u32 start_us = get_time();
     u32 deadline_us = start_us + timeout * 1000000U;
     int polls = 0;
