@@ -81,6 +81,10 @@ struct nvme_queue
  */
 s32  nvme_setup_admin_queue(struct NVMeController *ctrl);
 s32  nvme_setup_io_queue(struct NVMeController *ctrl);
+/* Asynchronous I/O-queue bring-up for the controller-reset path: runs on
+ * the unit task without blocking it (see nvme_queue.c).  Terminal step
+ * calls nvme_reset_finish(). */
+void nvme_reset_rebuild_io_async(struct NVMeController *ctrl);
 void nvme_teardown_queue(struct nvme_queue *q);
 
 /*

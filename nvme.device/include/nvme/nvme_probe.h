@@ -45,6 +45,16 @@ void nvme_reset_quiesce_all(struct NVMeDevice *base);
 int nvme_reset_ctrl(struct NVMeController *ctrl);
 void nvme_reset_controller(struct NVMeController *ctrl);
 
+/*
+ * nvme_reset_finish - terminal step of the asynchronous reset bring-up.
+ *
+ * Called from the I/O-queue async chain (nvme_queue.c) once Create I/O SQ
+ * completes (@ok = TRUE) or any bring-up step fails (@ok = FALSE).  On
+ * success: CONNECTING -> LIVE, arm AEN + unquiesce I/O, queue a rescan.
+ * On failure: DELETING -> DEAD.  Runs on the unit task.
+ */
+void nvme_reset_finish(struct NVMeController *ctrl, BOOL ok);
+
 /* ------------------------------------------------------------------ */
 /* Amiga-side helpers populated by probe                                */
 /* ------------------------------------------------------------------ */
