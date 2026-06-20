@@ -25,7 +25,7 @@
  *
  * MSI vs INTx split: MSI is edge-triggered and not shared, so there's
  * no surprise-removal CSTS probe to perform and no need for the per-vector
- * PCIe-config MaskMSI.  Masking at the NVMe level (INTMS) already suppresses 
+ * PCIe-config MaskMSI.  Masking at the NVMe level (INTMS) already suppresses
  * further interrupts for MSI and pin-based modes alike.  INTx keeps the full path:
  * it is level-triggered and may share the line, so the all-ones CSTS probe
  * (surprise-removal) and the PCIe-pin mask still matter.
@@ -87,7 +87,8 @@ static s32 nvme_pci_int_enable(struct NVMeController *ctrl)
     LONG nvec = AllocIntVectors(ctrl->pci_dev, 1, 1, flags);
     if (nvec < 1)
     {
-        Kprintf("[nvme] %s: AllocIntVectors failed (%ld)\n", __func__, (LONG)nvec);
+        Kprintf("[nvme] %s: AllocIntVectors failed: %s (%ld)\n", __func__,
+                pcie_strerror(nvec), (LONG)nvec);
         return -1;
     }
 
@@ -95,11 +96,14 @@ static s32 nvme_pci_int_enable(struct NVMeController *ctrl)
     ULONG itype = GetIntVectorType(ctrl->pci_dev);
     ctrl->msi_enabled = (itype != PCI_IRQ_INTX);
     Kprintf("[nvme] %s: using %s\n", __func__,
-            itype == PCI_IRQ_MSIX ? "MSI-X" : itype == PCI_IRQ_MSI ? "MSI" : "INTx");
+            itype == PCI_IRQ_MSIX ? "MSI-X" : itype == PCI_IRQ_MSI ? "MSI"
+                                                                   : "INTx");
 
-    if (AddIntVectorServer(ctrl->pci_dev, 0, &ctrl->irq_isr) != 0)
+    LONG rc = AddIntVectorServer(ctrl->pci_dev, 0, &ctrl->irq_isr);
+    if (rc != 0)
     {
-        Kprintf("[nvme] %s: AddIntVectorServer failed\n", __func__);
+        Kprintf("[nvme] %s: AddIntVectorServer failed: %s (%ld)\n", __func__,
+                pcie_strerror(rc), rc);
         FreeIntVectors(ctrl->pci_dev);
         return -1;
     }
