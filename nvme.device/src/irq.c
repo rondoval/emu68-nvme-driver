@@ -23,12 +23,11 @@
  * that lets one IRQ reap a whole burst), then signals the controller task to
  * drain the completion queue.
  *
- * MSI vs INTx split: MSI is edge-triggered and not shared, so there's
- * no surprise-removal CSTS probe to perform and no need for the per-vector
- * PCIe-config MaskMSI.  Masking at the NVMe level (INTMS) already suppresses
- * further interrupts for MSI and pin-based modes alike.  INTx keeps the full path:
- * it is level-triggered and may share the line, so the all-ones CSTS probe
- * (surprise-removal) and the PCIe-pin mask still matter.
+ * MSI vs INTx split: MSI is edge-triggered and not shared, so there's no
+ * surprise-removal CSTS probe to perform.  INTx is level-triggered and may
+ * share the gic line, so it keeps the all-ones CSTS probe, which doubles as the
+ * "is this interrupt ours?" check for the shared case (we return 0 and let the
+ * next server run when it isn't).
  *
  * Returns 1 if the interrupt was ours, 0 otherwise.
  */
@@ -46,16 +45,9 @@ static ULONG nvme_int_isr(struct ExecBase *execBase asm("a6"),
         return 1;
     }
 
-    struct Library *pcielibBase = ctrl->device->pcieBase;
-
     ULONG csts = mmio_read32((volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_CSTS));
     if (csts == 0xFFFFFFFFUL)
         return 0;
-
-    if (!CheckSetINTxMask(ctrl->pci_dev, TRUE))
-    {
-        KprintfH("[nvme] %s: failed to mask INTx\n", __func__);
-    }
 
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
 
@@ -149,27 +141,11 @@ void nvme_int_shutdown(struct NVMeController *ctrl)
  * nvme_int_rearm - re-enable the interrupt source after completion processing.
  *
  * Called from the controller task after nvme_process_completions() returns.
- * Mirrors the ISR's MSI/INTx split: MSI clears only the NVMe-level mask
- * (INTMC); INTx also unmasks the PCIe pin.  If completions arrived while
- * masked, clearing INTMC re-raises the interrupt so the stragglers are
- * drained on the next pass.
+ * Clearing the NVMe-level mask (INTMC) rearms the source for MSI and INTx
+ * alike; if completions arrived while masked, it re-raises the interrupt so the
+ * stragglers are drained on the next pass.
  */
 void nvme_int_rearm(struct NVMeController *ctrl)
 {
-    if (ctrl->msi_enabled)
-    {
-        mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
-        return;
-    }
-
-    struct Library *pcielibBase = ctrl->device->pcieBase;
-
-    if (!CheckSetINTxMask(ctrl->pci_dev, FALSE))
-    {
-        /* INTx unmask failed — re-signal ourselves so the task retries */
-        Signal(ctrl->unit_task, 1UL << ctrl->irq_signal);
-        return;
-    }
-
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
 }
