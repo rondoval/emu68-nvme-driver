@@ -184,9 +184,9 @@ static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info
 	{
 		Kprintf("[nvme] %s: duplicate IDs for nsid %lu; "
 				"enabling bogus-NID quirk\n", __func__, info->nsid);
-		mem_zero(info->ids.eui64, sizeof(info->ids.eui64));
-		mem_zero(info->ids.nguid, sizeof(info->ids.nguid));
-		mem_zero(info->ids.uuid, sizeof(info->ids.uuid));
+		memset(info->ids.eui64, 0, sizeof(info->ids.eui64));
+		memset(info->ids.nguid, 0, sizeof(info->ids.nguid));
+		memset(info->ids.uuid, 0, sizeof(info->ids.uuid));
 		ctrl->quirks |= NVME_QUIRK_BOGUS_NID;
 	}
 

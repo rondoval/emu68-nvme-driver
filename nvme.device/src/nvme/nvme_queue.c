@@ -71,7 +71,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
     KprintfH("[nvme] setup_queue: ctrl=%lx q=%lx qid=%lu depth=%lu\n",
              (ULONG)ctrl, (ULONG)q, (ULONG)qid, (ULONG)depth);
 
-    mem_zero(q, sizeof(*q));
+    memset(q, 0, sizeof(*q));
     q->ctrl = ctrl;
     q->qid = qid;
     q->depth = depth;
@@ -130,7 +130,7 @@ fail_inflight:
 fail_cq:
     dma_free(ctrl->dmaPool, q->sq);
 fail_sq:
-    mem_zero(q, sizeof(*q));
+    memset(q, 0, sizeof(*q));
     return -1;
 }
 
@@ -160,7 +160,7 @@ void nvme_teardown_queue(struct nvme_queue *q)
             pool_free(q->ctrl->metaPool, q->free_stack);
     }
 
-    mem_zero(q, sizeof(*q));
+    memset(q, 0, sizeof(*q));
 }
 
 /*
@@ -481,7 +481,7 @@ s32 nvme_setup_admin_queue(struct NVMeController *ctrl)
  * both 0-based — request exactly 1 SQ + 1 CQ. */
 static void nvme_build_set_num_queues(struct nvme_command *cmd)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->features.opcode = nvme_admin_set_features;
     cmd->features.fid = le32(NVME_FEAT_NUM_QUEUES);
     cmd->features.dword11 = le32(0);
@@ -490,7 +490,7 @@ static void nvme_build_set_num_queues(struct nvme_command *cmd)
 /* Create I/O CQ pointing at the just-allocated ctrl->io_q.cq, IRQ vector 0. */
 static void nvme_build_create_cq(struct NVMeController *ctrl, struct nvme_command *cmd)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->create_cq.opcode = nvme_admin_create_cq;
     cmd->create_cq.prp1 = le64((u64)(ULONG)ctrl->io_q.cq);
     cmd->create_cq.cqid = le16(NVME_IO_QID);
@@ -509,7 +509,7 @@ static void nvme_build_create_sq(struct NVMeController *ctrl, struct nvme_comman
     const u16 sq_prio = (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
                             ? NVME_SQ_PRIO_MEDIUM
                             : NVME_SQ_PRIO_URGENT;
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->create_sq.opcode = nvme_admin_create_sq;
     cmd->create_sq.prp1 = le64((u64)(ULONG)ctrl->io_q.sq);
     cmd->create_sq.sqid = le16(NVME_IO_QID);

@@ -67,7 +67,7 @@ static void format_le_decimal(const UBYTE *value, ULONG value_len,
         return;
     }
 
-    mem_zero(tmp, sizeof(tmp));
+    memset(tmp, 0, sizeof(tmp));
     CopyMem(value, tmp, value_len);
     while (!bytes_all_zero(tmp, value_len) &&
            digit_count < (ULONG)(sizeof(digits) - 1))
@@ -114,7 +114,7 @@ static void mul_u128_small(const UBYTE *value, ULONG multiplier,
 {
     ULONG carry = 0;
 
-    mem_zero(out, out_len);
+    memset(out, 0, out_len);
     for (ULONG i = 0; i < 16 && i < out_len; i++)
     {
         ULONG product = ((ULONG)value[i] * multiplier) + carry;
@@ -256,7 +256,7 @@ static BOOL nvmeadm_fetch_unit_info(struct nvmeadm_session *session)
 static BOOL nvmeadm_open_unit_internal(struct nvmeadm_session *session,
                                        ULONG unit, BOOL quiet)
 {
-    mem_zero(session, sizeof(*session));
+    memset(session, 0, sizeof(*session));
 
     session->port = CreateMsgPort();
     if (!session->port)
@@ -379,7 +379,7 @@ static void nvmeadm_build_get_log(struct NVMePassthruCmd *cmd, ULONG nsid,
 {
     ULONG numd = nvme_bytes_to_numd(size);
 
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_get_log_page;
     cmd->pt_Nsid = nsid;
     cmd->pt_Addr = buffer;
@@ -397,7 +397,7 @@ static void nvmeadm_build_get_log(struct NVMePassthruCmd *cmd, ULONG nsid,
 static void nvmeadm_build_identify(struct NVMePassthruCmd *cmd, ULONG nsid,
                                    ULONG cns, APTR buffer, ULONG size)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_identify;
     cmd->pt_Nsid = nsid;
     cmd->pt_Addr = buffer;
@@ -409,7 +409,7 @@ static void nvmeadm_build_identify_csi(struct NVMePassthruCmd *cmd, ULONG nsid,
                                        UBYTE cns, UBYTE csi,
                                        APTR buffer, ULONG size)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_identify;
     cmd->pt_Nsid = nsid;
     cmd->pt_Addr = buffer;
@@ -488,7 +488,7 @@ void nvmeadm_build_get_features(struct NVMePassthruCmd *cmd, ULONG nsid,
                                 UBYTE fid, UBYTE sel,
                                 APTR buffer, ULONG size)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_get_features;
     cmd->pt_Nsid = nsid;
     cmd->pt_Addr = buffer;
@@ -499,7 +499,7 @@ void nvmeadm_build_get_features(struct NVMePassthruCmd *cmd, ULONG nsid,
 void nvmeadm_build_self_test(struct NVMePassthruCmd *cmd, ULONG nsid,
                              UBYTE stc)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_dev_self_test;
     cmd->pt_Nsid = nsid;
     cmd->pt_Cdw10 = (ULONG)stc;
@@ -508,7 +508,7 @@ void nvmeadm_build_self_test(struct NVMePassthruCmd *cmd, ULONG nsid,
 void nvmeadm_build_download_fw(struct NVMePassthruCmd *cmd, APTR buffer,
                                ULONG size, ULONG offset_bytes)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_download_fw;
     cmd->pt_Addr = buffer;
     cmd->pt_DataLen = size;
@@ -519,7 +519,7 @@ void nvmeadm_build_download_fw(struct NVMePassthruCmd *cmd, APTR buffer,
 void nvmeadm_build_format_nvm(struct NVMePassthruCmd *cmd, ULONG nsid,
                               UBYTE lbaf, UBYTE ses)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_format_nvm;
     cmd->pt_Nsid = nsid;
     cmd->pt_Cdw10 = (ULONG)lbaf | ((ULONG)ses << 9);
@@ -529,7 +529,7 @@ void nvmeadm_build_sanitize_nvm(struct NVMePassthruCmd *cmd, UBYTE sanact,
                                 BOOL ause, UBYTE owpass,
                                 BOOL oipbp, BOOL nodas)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_sanitize_nvm;
     cmd->pt_Cdw10 = (ULONG)(sanact & 0x7U) |
                     ((ULONG)(ause ? 1U : 0U) << 3) |
@@ -541,7 +541,7 @@ void nvmeadm_build_sanitize_nvm(struct NVMePassthruCmd *cmd, UBYTE sanact,
 void nvmeadm_build_activate_fw(struct NVMePassthruCmd *cmd, UBYTE slot,
                                UBYTE action)
 {
-    mem_zero(cmd, sizeof(*cmd));
+    memset(cmd, 0, sizeof(*cmd));
     cmd->pt_Opcode = nvme_admin_activate_fw;
     cmd->pt_Cdw10 = (ULONG)slot | (ULONG)action;
 }

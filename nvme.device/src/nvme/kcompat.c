@@ -62,17 +62,3 @@ s64 nvme_unix_time_ms(void)
 	DeleteMsgPort(port);
 	return 0;
 }
-
-/* libc memcmp fallback: kcompat.h aliases normal call sites to the GCC
- * builtin, but freestanding variable-size compares may still need a real
- * symbol when libc is absent. */
-int memcmp(const void *a, const void *b, unsigned long n)
-{
-	const unsigned char *pa = a, *pb = b;
-	while (n--) {
-		if (*pa != *pb)
-			return *pa - *pb;
-		pa++; pb++;
-	}
-	return 0;
-}

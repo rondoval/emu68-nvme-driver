@@ -93,8 +93,6 @@ static inline int check_shl_overflow(u32 value, u32 shift, u32 *result)
 	return 0;
 }
 
-int memcmp(const void *a, const void *b, unsigned long n);
-
 /* Wall-clock helper for NVMe's Timestamp feature payload.
  * Returns Unix-epoch milliseconds. */
 s64 nvme_unix_time_ms(void);

@@ -82,7 +82,7 @@ static void nvme_unit_close_flush(struct NVMeUnit *unit)
         return;
 
     struct IOStdReq io;
-    mem_zero(&io, sizeof(io));
+    memset(&io, 0, sizeof(io));
     io.io_Message.mn_Node.ln_Type = NT_MESSAGE;
     io.io_Message.mn_ReplyPort = port;
     io.io_Message.mn_Length = sizeof(io);

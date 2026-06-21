@@ -203,7 +203,7 @@ int run_units(void)
         }
 
         struct DriveGeometry dg;
-        mem_zero(&dg, sizeof(dg));
+        memset(&dg, 0, sizeof(dg));
         struct IOStdReq *req = (struct IOStdReq *)session.io;
         req->io_Command = TD_GETGEOMETRY;
         req->io_Data = &dg;
@@ -384,7 +384,7 @@ int run_list_ns(void)
 
             ULONG nsid = read_le32(list + (i * 4UL));
 
-            mem_zero(ns, sizeof(*ns));
+            memset(ns, 0, sizeof(*ns));
             if (nvmeadm_fetch_identify(&session, (CONST_STRPTR)"Identify Namespace",
                                        nsid, NVME_ID_CNS_NS, ns, sizeof(*ns)))
             {
@@ -467,7 +467,7 @@ int run_identify_caps(void)
                                                    nvm_ctrl, sizeof(*nvm_ctrl),
                                                    &nvm_status, &nvm_result);
 
-        mem_zero(nvm_ctrl, sizeof(*nvm_ctrl));
+        memset(nvm_ctrl, 0, sizeof(*nvm_ctrl));
         zns_supported = nvmeadm_fetch_identify_csi(&session, 0,
                                                    NVME_ID_CNS_CS_CTRL,
                                                    NVME_CSI_ZNS,

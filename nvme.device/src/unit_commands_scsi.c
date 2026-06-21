@@ -375,7 +375,7 @@ static BYTE scsi_inquiry_vpd_b0(struct NVMeUnit *unit,
     /* Build the response in a small stack buffer so we don't have to
      * worry about scsi_Length truncation mid-write. */
     UBYTE page[64];
-    mem_zero(page, sizeof(page));
+    memset(page, 0, sizeof(page));
 
     page[0] = 0;                   /* peripheral type */
     page[1] = 0xB0;                /* page code */
@@ -429,7 +429,7 @@ static BYTE scsi_inquiry_vpd_b2(struct NVMeUnit *unit,
     if (!buf)
         return IOERR_BADADDRESS;
 
-    mem_zero(page, sizeof(page));
+    memset(page, 0, sizeof(page));
     page[0] = 0;                  /* peripheral type */
     page[1] = 0xB2;               /* page code */
     scsi_store_be16(&page[2], 4); /* page length (n - 3 with n=7) */
