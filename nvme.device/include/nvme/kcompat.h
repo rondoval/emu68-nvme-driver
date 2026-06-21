@@ -11,6 +11,8 @@
 #ifndef _NVME_KCOMPAT_H
 #define _NVME_KCOMPAT_H
 
+#include <exec/execbase.h> /* DMA_ReadFromRAM for CachePreDMA(); older NDKs don't pull it in transitively */
+
 #define USEC_PER_SEC 1000000UL
 
 /* Pre-DMA cache maintenance.  @to_device selects the memory->device direction

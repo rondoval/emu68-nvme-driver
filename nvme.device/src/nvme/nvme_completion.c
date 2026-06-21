@@ -19,6 +19,7 @@
 #include <nvme/nvme_io.h> /* nvme_cleanup_cmd, nvme_req_destroy, NVME_IO_ASYNC,
                                    * nvme_io_context_pump, nvme_io_context_finish */
 #include <nvme/nvme_completion.h>
+#include <minlist.h>
 
 /* max number of retries a command may have */
 #define NVME_MAX_RETRIES 5U
