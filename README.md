@@ -1,5 +1,10 @@
 # emu68-nvme-driver
 
+> **Releases:** this component ships as part of the
+> [emu68-driver-stack](https://github.com/rondoval/emu68-driver-stack) — the downloadable
+> `.lha` and bundled documentation are published there. This repository is source-only
+> and versioned via git tags.
+
 `emu68-nvme-driver` provides `nvme.device`, an AmigaOS block-storage driver for NVMe SSDs on
 Emu68 systems using the CM4 PCIe path.
 
