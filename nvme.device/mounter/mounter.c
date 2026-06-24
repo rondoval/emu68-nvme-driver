@@ -464,14 +464,14 @@ static APTR fsrelocate(struct MountData *md)
 		if (!lseg_read_long(md, &hunkHeadSize)) {
 			goto end;
 		}
-		if ((hunkHeadSize & (HUNKF_CHIP | HUNKF_FAST)) == (HUNKF_CHIP | HUNKF_FAST)) {
+		if ((hunkHeadSize & (ULONG)(HUNKF_CHIP | HUNKF_FAST)) == (ULONG)(HUNKF_CHIP | HUNKF_FAST)) {
 			if (!lseg_read_long(md, &memoryFlags)) {
 				goto end;
 			}
 		} else if (hunkHeadSize & HUNKF_CHIP) {
 			memoryFlags |= MEMF_CHIP;
 		}
-		hunkHeadSize &= ~(HUNKF_CHIP | HUNKF_FAST);
+		hunkHeadSize &= ~(ULONG)(HUNKF_CHIP | HUNKF_FAST);
 		rh->hunkSize = hunkHeadSize;
 		rh->hunkData = AllocMem((hunkHeadSize + 2) * sizeof(ULONG), memoryFlags | MEMF_CLEAR);
 		if (!rh->hunkData) {

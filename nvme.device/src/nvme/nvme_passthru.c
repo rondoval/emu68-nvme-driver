@@ -231,7 +231,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
      * every admin opcode we care about (Identify, Get/Set Features,
      * Get Log Page, Format NVM, Sanitize, FW Commit, …). */
     struct nvme_command cmd;
-    mem_zero(&cmd, sizeof(cmd));
+    memset(&cmd, 0, sizeof(cmd));
     cmd.common.opcode = uc->pt_Opcode;
     cmd.common.flags = uc->pt_Flags;
     cmd.common.nsid = le32(uc->pt_Nsid);

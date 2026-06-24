@@ -31,6 +31,7 @@
 #include <nvme/nvme_io.h>
 #include <nvme/nvme_admin.h> /* nvme_abort_request, nvme_submit_sync_cmd */
 #include <nvme/nvme_queue.h>
+#include <nvme/nvme_probe.h> /* nvme_reset_finish (async reset terminal) */
 
 #define NVME_IO_QID 1 /* sole I/O queue ID (we create one pair) */
 
@@ -70,7 +71,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
     KprintfH("[nvme] setup_queue: ctrl=%lx q=%lx qid=%lu depth=%lu\n",
              (ULONG)ctrl, (ULONG)q, (ULONG)qid, (ULONG)depth);
 
-    mem_zero(q, sizeof(*q));
+    memset(q, 0, sizeof(*q));
     q->ctrl = ctrl;
     q->qid = qid;
     q->depth = depth;
@@ -129,7 +130,7 @@ fail_inflight:
 fail_cq:
     dma_free(ctrl->dmaPool, q->sq);
 fail_sq:
-    mem_zero(q, sizeof(*q));
+    memset(q, 0, sizeof(*q));
     return -1;
 }
 
@@ -159,7 +160,7 @@ void nvme_teardown_queue(struct nvme_queue *q)
             pool_free(q->ctrl->metaPool, q->free_stack);
     }
 
-    mem_zero(q, sizeof(*q));
+    memset(q, 0, sizeof(*q));
 }
 
 /*
@@ -283,6 +284,26 @@ void nvme_process_completions(struct NVMeController *ctrl)
  *   command, sending another Abort would loop forever.  Escalate
  *   straight to reset.
  */
+
+/*
+ * nvme_watchdog_escalate - last-resort recovery for a wedged command.
+ *
+ * Only a LIVE controller is reset: reset (RESETTING) tears down and
+ * rebuilds the queues, which must not run concurrently with the
+ * controller bring-up that owns its own failure/cleanup (NEW/CONNECTING)
+ * or with an in-progress reset (RESETTING) — both would race the teardown.
+ * Off the LIVE path we instead force-complete @q's in-flight requests in
+ * place (host-aborted), so a blocked bring-up / reset-chain caller fails
+ * gracefully without a second, racing reset.
+ */
+static void nvme_watchdog_escalate(struct NVMeController *ctrl, struct nvme_queue *q)
+{
+    if (nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE)
+        Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
+    else
+        nvme_flush_queue_inflight(q);
+}
+
 static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
 {
     struct NVMeController *ctrl = q->ctrl;
@@ -306,11 +327,11 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
                 continue;
 
             KprintfH("[nvme] abort grace expired: qid=%lu cid=0x%lx "
-                     "opcode=0x%02lx — requesting controller reset\n",
+                     "opcode=0x%02lx — escalating\n",
                      (ULONG)q->qid, (ULONG)req->cid,
                      (ULONG)req->cmd.common.opcode);
-            Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
-            return; /* one reset is enough per tick */
+            nvme_watchdog_escalate(ctrl, q);
+            return; /* one escalation is enough per tick */
         }
 
         /* first timeout test. */
@@ -324,9 +345,9 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
          * straight to controller reset. */
         if (req->cmd.common.opcode == nvme_admin_abort_cmd)
         {
-            Kprintf("[nvme] abort cmd itself timed out: cid=0x%lx — reset\n",
+            Kprintf("[nvme] abort cmd itself timed out: cid=0x%lx — escalating\n",
                     (ULONG)req->cid);
-            Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
+            nvme_watchdog_escalate(ctrl, q);
             return;
         }
 
@@ -365,6 +386,13 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
  */
 void nvme_tick_watchdog(struct NVMeController *ctrl)
 {
+    /* Reap any CQEs the controller posted without (or before) an MSI: the
+     * completion was DMA-written to host memory regardless of whether the
+     * interrupt was delivered, so a missing/late MSI must not strand it
+     * until the timeout sweep below aborts a command that already finished.
+     * Same unit-task context as the IRQ-driven drain, so this is safe. */
+    nvme_process_completions(ctrl);
+
     u32 now = get_time();
 
     watchdog_scan_queue(&ctrl->admin_q, now);
@@ -444,6 +472,62 @@ s32 nvme_setup_admin_queue(struct NVMeController *ctrl)
 }
 
 /*
+ * I/O-queue bring-up SQE builders — shared by the synchronous probe path
+ * (nvme_setup_io_queue) and the asynchronous reset path
+ * (nvme_reset_rebuild_io_async) so the two encodings cannot drift.
+ */
+
+/* Set Features (Number of Queues): dword11 bits[15:0]=NSQR, [31:16]=NCQR,
+ * both 0-based — request exactly 1 SQ + 1 CQ. */
+static void nvme_build_set_num_queues(struct nvme_command *cmd)
+{
+    memset(cmd, 0, sizeof(*cmd));
+    cmd->features.opcode = nvme_admin_set_features;
+    cmd->features.fid = le32(NVME_FEAT_NUM_QUEUES);
+    cmd->features.dword11 = le32(0);
+}
+
+/* Create I/O CQ pointing at the just-allocated ctrl->io_q.cq, IRQ vector 0. */
+static void nvme_build_create_cq(struct NVMeController *ctrl, struct nvme_command *cmd)
+{
+    memset(cmd, 0, sizeof(*cmd));
+    cmd->create_cq.opcode = nvme_admin_create_cq;
+    cmd->create_cq.prp1 = le64((u64)(ULONG)ctrl->io_q.cq);
+    cmd->create_cq.cqid = le16(NVME_IO_QID);
+    cmd->create_cq.qsize = le16(NVME_IO_QUEUE_SIZE - 1);
+    cmd->create_cq.cq_flags = le16(NVME_QUEUE_PHYS_CONTIG | NVME_CQ_IRQ_ENABLED);
+    cmd->create_cq.irq_vector = le16(0);
+}
+
+/* Create I/O SQ pointing at ctrl->io_q.sq and the I/O CQ just created.
+ * NVME_QUIRK_MEDIUM_PRIO_SQ: some drives (Intel 600p / P3100) auto-enable
+ * weighted-round-robin internally unless the SQ priority is MEDIUM; since
+ * URGENT encodes as zero, leaving it default makes every queue URGENT.
+ * Setting QPRIO=MEDIUM works around the bug regardless of host CC.AMS. */
+static void nvme_build_create_sq(struct NVMeController *ctrl, struct nvme_command *cmd)
+{
+    const u16 sq_prio = (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
+                            ? NVME_SQ_PRIO_MEDIUM
+                            : NVME_SQ_PRIO_URGENT;
+    memset(cmd, 0, sizeof(*cmd));
+    cmd->create_sq.opcode = nvme_admin_create_sq;
+    cmd->create_sq.prp1 = le64((u64)(ULONG)ctrl->io_q.sq);
+    cmd->create_sq.sqid = le16(NVME_IO_QID);
+    cmd->create_sq.qsize = le16(NVME_IO_QUEUE_SIZE - 1);
+    cmd->create_sq.sq_flags = le16(NVME_QUEUE_PHYS_CONTIG | sq_prio);
+    cmd->create_sq.cqid = le16(NVME_IO_QID);
+}
+
+/* Cache the in-flight ceiling once io_q.depth is known; read directly as
+ * ctrl->io_max_inflight on every dispatch / back-pressure check. */
+static void nvme_set_io_max_inflight(struct NVMeController *ctrl)
+{
+    ctrl->io_max_inflight = (ctrl->quirks & NVME_QUIRK_QDEPTH_ONE)
+                                ? 1
+                                : (ctrl->io_q.depth > 1 ? (u16)(ctrl->io_q.depth - 1) : 1);
+}
+
+/*
  * nvme_setup_io_queue - negotiate, allocate, and create one I/O queue pair.
  *
  * Three-step admin sequence:
@@ -470,12 +554,8 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
 
     KprintfH("[nvme] setup_io_queue: ctrl=%lx\n", (ULONG)ctrl);
 
-    /* Step 1: ask for 1 I/O SQ and 1 I/O CQ.  dword11 encoding:
-     * bits[15:0] = NSQR (0-based), bits[31:16] = NCQR (0-based). */
-    mem_zero(&cmd, sizeof(cmd));
-    cmd.features.opcode = nvme_admin_set_features;
-    cmd.features.fid = le32(NVME_FEAT_NUM_QUEUES);
-    cmd.features.dword11 = le32(0); /* request 1+1 (zero-based) */
+    /* Step 1: ask for 1 I/O SQ and 1 I/O CQ. */
+    nvme_build_set_num_queues(&cmd);
     ret = nvme_submit_sync_cmd(ctrl, &cmd, &result, NULL, 0);
     if (ret)
     {
@@ -495,14 +575,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
         return -1;
 
     /* Step 3a: Create I/O CQ. */
-    mem_zero(&cmd, sizeof(cmd));
-    cmd.create_cq.opcode = nvme_admin_create_cq;
-    cmd.create_cq.prp1 = le64((u64)(ULONG)ctrl->io_q.cq);
-    cmd.create_cq.cqid = le16(NVME_IO_QID);
-    cmd.create_cq.qsize = le16(NVME_IO_QUEUE_SIZE - 1);
-    cmd.create_cq.cq_flags = le16(NVME_QUEUE_PHYS_CONTIG |
-                                  NVME_CQ_IRQ_ENABLED);
-    cmd.create_cq.irq_vector = le16(0);
+    nvme_build_create_cq(ctrl, &cmd);
     ret = nvme_submit_sync_cmd(ctrl, &cmd, NULL, NULL, 0);
     if (ret)
     {
@@ -510,21 +583,8 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
         goto fail;
     }
 
-    /* Step 3b: Create I/O SQ pointing at the CQ just created.
-     * NVME_QUIRK_MEDIUM_PRIO_SQ: some drives (Intel 600p / P3100) auto-enable
-     * weighted-round-robin internally unless the SQ priority is MEDIUM; since
-     * URGENT encodes as zero, leaving it default makes every queue URGENT.
-     * Setting QPRIO=MEDIUM works around the bug regardless of host CC.AMS. */
-    const u16 sq_prio = (ctrl->quirks & NVME_QUIRK_MEDIUM_PRIO_SQ)
-                            ? NVME_SQ_PRIO_MEDIUM
-                            : NVME_SQ_PRIO_URGENT;
-    mem_zero(&cmd, sizeof(cmd));
-    cmd.create_sq.opcode = nvme_admin_create_sq;
-    cmd.create_sq.prp1 = le64((u64)(ULONG)ctrl->io_q.sq);
-    cmd.create_sq.sqid = le16(NVME_IO_QID);
-    cmd.create_sq.qsize = le16(NVME_IO_QUEUE_SIZE - 1);
-    cmd.create_sq.sq_flags = le16(NVME_QUEUE_PHYS_CONTIG | sq_prio);
-    cmd.create_sq.cqid = le16(NVME_IO_QID);
+    /* Step 3b: Create I/O SQ pointing at the CQ just created. */
+    nvme_build_create_sq(ctrl, &cmd);
     ret = nvme_submit_sync_cmd(ctrl, &cmd, NULL, NULL, 0);
     if (ret)
     {
@@ -532,11 +592,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
         goto fail;
     }
 
-    /* Cache the in-flight ceiling now io_q.depth is known; read directly as
-     * ctrl->io_max_inflight on every dispatch / back-pressure check. */
-    ctrl->io_max_inflight = (ctrl->quirks & NVME_QUIRK_QDEPTH_ONE)
-                                ? 1
-                                : (ctrl->io_q.depth > 1 ? (u16)(ctrl->io_q.depth - 1) : 1);
+    nvme_set_io_max_inflight(ctrl);
 
     KprintfH("[nvme] %s: I/O queue pair (QID=%lu) ready, SQ@%lx CQ@%lx\n",
              __func__, (ULONG)NVME_IO_QID,
@@ -546,6 +602,122 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
 fail:
     nvme_teardown_queue(&ctrl->io_q);
     return -1;
+}
+
+/* ------------------------------------------------------------------ */
+/* Asynchronous I/O-queue bring-up (controller-reset path).            */
+/*                                                                     */
+/* nvme_reset_controller() runs on the unit task — the same task that  */
+/* drains the CQ — so it cannot use nvme_submit_sync_cmd (Wait()ing on */
+/* a completion only it can deliver would deadlock).  Instead the      */
+/* bring-up is a short async chain: each step submits via              */
+/* nvme_submit_async_cmd and its completion callback (fired from the   */
+/* unit task's own drain_cq) launches the next.  The unit task never   */
+/* blocks; the terminal step calls nvme_reset_finish() to drive the    */
+/* LIVE/scan transition (or DEAD on failure).  ctrl is threaded        */
+/* through as the async 'priv'.                                        */
+/* ------------------------------------------------------------------ */
+
+/* done() for Create I/O SQ — the last step: cache the depth, go LIVE. */
+static void nvme_io_setup_async_sq(struct nvme_request *req)
+{
+    struct NVMeController *ctrl = (struct NVMeController *)req->priv;
+    int status = (int)req->status;
+    slab_free(&req->ac->req_slab, req);
+
+    if (status)
+    {
+        Kprintf("[nvme] reset: Create I/O SQ failed: %ld\n", (LONG)status);
+        nvme_teardown_queue(&ctrl->io_q);
+        nvme_reset_finish(ctrl, FALSE);
+        return;
+    }
+
+    nvme_set_io_max_inflight(ctrl);
+    KprintfH("[nvme] reset: I/O queue pair (QID=%lu) ready (async)\n",
+             (ULONG)NVME_IO_QID);
+    nvme_reset_finish(ctrl, TRUE);
+}
+
+/* done() for Create I/O CQ — submit Create I/O SQ. */
+static void nvme_io_setup_async_cq(struct nvme_request *req)
+{
+    struct NVMeController *ctrl = (struct NVMeController *)req->priv;
+    int status = (int)req->status;
+    slab_free(&req->ac->req_slab, req);
+
+    if (status)
+    {
+        Kprintf("[nvme] reset: Create I/O CQ failed: %ld\n", (LONG)status);
+        nvme_teardown_queue(&ctrl->io_q);
+        nvme_reset_finish(ctrl, FALSE);
+        return;
+    }
+
+    struct nvme_command cmd;
+    nvme_build_create_sq(ctrl, &cmd);
+    if (nvme_submit_async_cmd(ctrl, &cmd, NULL, 0,
+                              nvme_io_setup_async_sq, ctrl, 0) != 0)
+    {
+        Kprintf("[nvme] reset: Create I/O SQ submit failed\n");
+        nvme_teardown_queue(&ctrl->io_q);
+        nvme_reset_finish(ctrl, FALSE);
+    }
+}
+
+/* done() for Set Features (Num Queues) — allocate rings, submit Create CQ. */
+static void nvme_io_setup_async_features(struct nvme_request *req)
+{
+    struct NVMeController *ctrl = (struct NVMeController *)req->priv;
+    int status = (int)req->status;
+    slab_free(&req->ac->req_slab, req);
+
+    if (status)
+    {
+        Kprintf("[nvme] reset: Set Features (Num Queues) failed: %ld\n", (LONG)status);
+        nvme_reset_finish(ctrl, FALSE);
+        return;
+    }
+
+    if (nvme_setup_queue(ctrl, &ctrl->io_q, NVME_IO_QID, NVME_IO_QUEUE_SIZE) != 0)
+    {
+        Kprintf("[nvme] reset: I/O queue alloc failed\n");
+        nvme_reset_finish(ctrl, FALSE);
+        return;
+    }
+
+    struct nvme_command cmd;
+    nvme_build_create_cq(ctrl, &cmd);
+    if (nvme_submit_async_cmd(ctrl, &cmd, NULL, 0,
+                              nvme_io_setup_async_cq, ctrl, 0) != 0)
+    {
+        Kprintf("[nvme] reset: Create I/O CQ submit failed\n");
+        nvme_teardown_queue(&ctrl->io_q);
+        nvme_reset_finish(ctrl, FALSE);
+    }
+}
+
+/*
+ * nvme_reset_rebuild_io_async - kick off the async I/O-queue bring-up.
+ *
+ * Called by nvme_reset_controller after the (synchronous) admin-queue
+ * rebuild.  Submits the first command and returns immediately; the unit
+ * task's drain loop carries the chain forward.  On a submit failure (or
+ * any step's failure) nvme_reset_finish(ctrl, FALSE) takes the controller
+ * to DEAD.
+ */
+void nvme_reset_rebuild_io_async(struct NVMeController *ctrl)
+{
+    struct nvme_command cmd;
+
+    KprintfH("[nvme] reset: starting async I/O-queue bring-up\n");
+    nvme_build_set_num_queues(&cmd);
+    if (nvme_submit_async_cmd(ctrl, &cmd, NULL, 0,
+                              nvme_io_setup_async_features, ctrl, 0) != 0)
+    {
+        Kprintf("[nvme] reset: Set Features (Num Queues) submit failed\n");
+        nvme_reset_finish(ctrl, FALSE);
+    }
 }
 
 /* ------------------------------------------------------------------ */

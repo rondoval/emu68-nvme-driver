@@ -19,6 +19,8 @@ struct ExecBase    *SysBase;
 struct DosLibrary  *DOSBase;
 struct Library     *BCMPCIEBase;
 
+static const char verstag[] __attribute__((used)) = VERSTAG;
+
 #define NVME_CLASS_CODE 0x010802UL
 
 /* NVMe BAR0 register offsets */

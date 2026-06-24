@@ -23,6 +23,12 @@
 #define DEVICE_USE_MSI TRUE
 #endif
 
+/* Prefer MSI-X when the device and controller support it (falls back to MSI
+ * then INTx).  Set FALSE to forbid MSI-X for this driver. */
+#ifndef DEVICE_USE_MSIX
+#define DEVICE_USE_MSIX TRUE
+#endif
+
 /* NVMe interrupt coalescing (Set Features 0x08), disabled by default.
  *
  * TIME is the aggregation window in 100 µs units; THR is the completion

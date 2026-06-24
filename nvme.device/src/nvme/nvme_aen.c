@@ -233,7 +233,7 @@ void nvme_submit_aer(struct NVMeController *ctrl)
 		return;
 
 	struct nvme_command cmd;
-	mem_zero(&cmd, sizeof(cmd));
+	memset(&cmd, 0, sizeof(cmd));
 	cmd.common.opcode = nvme_admin_async_event;
 
 	int ret = nvme_submit_async_cmd(ctrl, &cmd, NULL, 0,

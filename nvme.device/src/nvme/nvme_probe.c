@@ -119,6 +119,9 @@ static void hw_shutdown(struct NVMeController *ctrl)
 static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
                            u32 timeout, const char *op)
 {
+#ifndef DEBUG
+    (void)op; /* only referenced by debug logging */
+#endif
     u32 start_us = get_time();
     u32 deadline_us = start_us + timeout * 1000000U;
     int polls = 0;
@@ -852,10 +855,33 @@ void nvme_reset_controller(struct NVMeController *ctrl)
     /* Admin queue is back up; AdminWorker can dispatch again before we
      * use the admin path for Create I/O CQ/SQ. */
     nvme_unquiesce_admin_queue(ctrl);
-    if (nvme_setup_io_queue(ctrl) != 0)
+
+    /* Rebuild the I/O queue pair ASYNCHRONOUSLY.  Reset runs on the unit
+     * task — the same task that drains the CQ — so the sync
+     * nvme_setup_io_queue would deadlock (Wait()ing on a completion only
+     * this task can deliver).  Kick the async chain and return to the
+     * drain loop; its terminal step calls nvme_reset_finish() to drive
+     * the LIVE transition + rescan (or DEAD on failure).  The controller
+     * stays in RESETTING until then. */
+    nvme_reset_rebuild_io_async(ctrl);
+    return;
+
+dead:
+    nvme_reset_finish(ctrl, FALSE);
+}
+
+/*
+ * nvme_reset_finish - terminal step of the async reset bring-up; see the
+ * header doc.  Mirrors the LIVE-go sequence from nvme_probe_controller.
+ */
+void nvme_reset_finish(struct NVMeController *ctrl, BOOL ok)
+{
+    if (!ok)
     {
-        Kprintf("[nvme] reset: setup_io_queue failed\n");
-        goto dead;
+        nvme_change_ctrl_state(ctrl, NVME_CTRL_DELETING);
+        nvme_change_ctrl_state(ctrl, NVME_CTRL_DEAD);
+        Kprintf("[nvme] reset: controller transitioned to DEAD\n");
+        return;
     }
 
     nvme_change_ctrl_state(ctrl, NVME_CTRL_CONNECTING);
@@ -869,10 +895,4 @@ void nvme_reset_controller(struct NVMeController *ctrl)
     nvme_queue_scan(ctrl);
 
     KprintfH("[nvme] reset: complete, controller LIVE\n");
-    return;
-
-dead:
-    nvme_change_ctrl_state(ctrl, NVME_CTRL_DELETING);
-    nvme_change_ctrl_state(ctrl, NVME_CTRL_DEAD);
-    Kprintf("[nvme] reset: controller transitioned to DEAD\n");
 }

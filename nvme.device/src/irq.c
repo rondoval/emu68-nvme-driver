@@ -10,6 +10,8 @@
 #include <proto/bcmpcie.h>
 #endif
 
+#include <libraries/pci_constants.h> /* PCI_IRQ_* flags */
+
 #include "nvme/nvme_ctrl.h"
 #include "device.h"
 
@@ -21,12 +23,11 @@
  * that lets one IRQ reap a whole burst), then signals the controller task to
  * drain the completion queue.
  *
- * MSI vs INTx split: MSI is edge-triggered and not shared, so there's
- * no surprise-removal CSTS probe to perform and no need for the per-vector
- * PCIe-config MaskMSI.  Masking at the NVMe level (INTMS) already suppresses 
- * further interrupts for MSI and pin-based modes alike.  INTx keeps the full path:
- * it is level-triggered and may share the line, so the all-ones CSTS probe
- * (surprise-removal) and the PCIe-pin mask still matter.
+ * MSI vs INTx split: MSI is edge-triggered and not shared, so there's no
+ * surprise-removal CSTS probe to perform.  INTx is level-triggered and may
+ * share the gic line, so it keeps the all-ones CSTS probe, which doubles as the
+ * "is this interrupt ours?" check for the shared case (we return 0 and let the
+ * next server run when it isn't).
  *
  * Returns 1 if the interrupt was ours, 0 otherwise.
  */
@@ -44,16 +45,9 @@ static ULONG nvme_int_isr(struct ExecBase *execBase asm("a6"),
         return 1;
     }
 
-    struct Library *pcielibBase = ctrl->device->pcieBase;
-
     ULONG csts = mmio_read32((volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_CSTS));
     if (csts == 0xFFFFFFFFUL)
         return 0;
-
-    if (!CheckSetINTxMask(ctrl->pci_dev, TRUE))
-    {
-        KprintfH("[nvme] %s: failed to mask INTx\n", __func__);
-    }
 
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
 
@@ -73,24 +67,36 @@ static s32 nvme_pci_int_enable(struct NVMeController *ctrl)
 {
     struct Library *pcielibBase = ctrl->device->pcieBase;
 
-    if (ctrl->quirks & NVME_QUIRK_BROKEN_MSI)
+    /* Allowed interrupt types, from build config.  The broken-MSI quirk drops
+     * plain MSI, so a quirked device falls back to MSI-X (preferred anyway) or
+     * INTx and never uses its dead single-message MSI. */
+    ULONG flags = PCI_IRQ_INTX;
+    if (DEVICE_USE_MSI && !(ctrl->quirks & NVME_QUIRK_BROKEN_MSI))
+        flags |= PCI_IRQ_MSI;
+    if (DEVICE_USE_MSIX)
+        flags |= PCI_IRQ_MSIX;
+
+    LONG nvec = AllocIntVectors(ctrl->pci_dev, 1, 1, flags);
+    if (nvec < 1)
     {
-        /* Device advertises MSI but never fires it — skip MSI and use INTx. */
-        Kprintf("[nvme] %s: NVME_QUIRK_BROKEN_MSI set, forcing INTx\n", __func__);
-    }
-    else if (DEVICE_USE_MSI && EnableMSI(ctrl->pci_dev) == 0)
-    {
-        Kprintf("[nvme] %s: MSI enabled\n", __func__);
-        ctrl->msi_enabled = TRUE;
-    }
-    else
-    {
-        Kprintf("[nvme] %s: MSI unavailable, using INTx\n", __func__);
+        Kprintf("[nvme] %s: AllocIntVectors failed: %s (%ld)\n", __func__,
+                pcie_strerror(nvec), (LONG)nvec);
+        return -1;
     }
 
-    if (!pci_add_intserver(&ctrl->irq_isr, ctrl->pci_dev))
+    /* Message-signalled (MSI or MSI-X) vs INTx steers the ISR's masking path. */
+    ULONG itype = GetIntVectorType(ctrl->pci_dev);
+    ctrl->msi_enabled = (itype != PCI_IRQ_INTX);
+    Kprintf("[nvme] %s: using %s\n", __func__,
+            itype == PCI_IRQ_MSIX ? "MSI-X" : itype == PCI_IRQ_MSI ? "MSI"
+                                                                   : "INTx");
+
+    LONG rc = AddIntVectorServer(ctrl->pci_dev, 0, &ctrl->irq_isr);
+    if (rc != 0)
     {
-        Kprintf("[nvme] %s: pci_add_intserver failed\n", __func__);
+        Kprintf("[nvme] %s: AddIntVectorServer failed: %s (%ld)\n", __func__,
+                pcie_strerror(rc), rc);
+        FreeIntVectors(ctrl->pci_dev);
         return -1;
     }
 
@@ -126,10 +132,8 @@ void nvme_int_shutdown(struct NVMeController *ctrl)
     struct Library *pcielibBase = ctrl->device->pcieBase;
 
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
-    pci_rem_intserver(&ctrl->irq_isr, ctrl->pci_dev);
-
-    if (ctrl->msi_enabled)
-        DisableMSI(ctrl->pci_dev);
+    RemIntVectorServer(ctrl->pci_dev, 0, &ctrl->irq_isr);
+    FreeIntVectors(ctrl->pci_dev);
     ctrl->msi_enabled = FALSE;
 }
 
@@ -137,27 +141,11 @@ void nvme_int_shutdown(struct NVMeController *ctrl)
  * nvme_int_rearm - re-enable the interrupt source after completion processing.
  *
  * Called from the controller task after nvme_process_completions() returns.
- * Mirrors the ISR's MSI/INTx split: MSI clears only the NVMe-level mask
- * (INTMC); INTx also unmasks the PCIe pin.  If completions arrived while
- * masked, clearing INTMC re-raises the interrupt so the stragglers are
- * drained on the next pass.
+ * Clearing the NVMe-level mask (INTMC) rearms the source for MSI and INTx
+ * alike; if completions arrived while masked, it re-raises the interrupt so the
+ * stragglers are drained on the next pass.
  */
 void nvme_int_rearm(struct NVMeController *ctrl)
 {
-    if (ctrl->msi_enabled)
-    {
-        mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
-        return;
-    }
-
-    struct Library *pcielibBase = ctrl->device->pcieBase;
-
-    if (!CheckSetINTxMask(ctrl->pci_dev, FALSE))
-    {
-        /* INTx unmask failed — re-signal ourselves so the task retries */
-        Signal(ctrl->unit_task, 1UL << ctrl->irq_signal);
-        return;
-    }
-
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
 }

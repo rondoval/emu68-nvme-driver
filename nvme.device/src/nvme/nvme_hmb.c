@@ -70,7 +70,7 @@ static int nvme_set_host_mem(struct NVMeController *ctrl, u32 bits)
              __func__, (ULONG)bits, (ULONG)host_mem_size_pages,
              (ULONG)dma_addr, (ULONG)ctrl->hmb_nr_descs);
 
-    mem_zero(&cmd, sizeof(cmd));
+    memset(&cmd, 0, sizeof(cmd));
     cmd.features.opcode = nvme_admin_set_features;
     cmd.features.fid = le32(NVME_FEAT_HOST_MEM_BUF);
     cmd.features.dword11 = le32(bits);

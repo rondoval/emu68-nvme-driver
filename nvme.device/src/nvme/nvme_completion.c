@@ -19,6 +19,7 @@
 #include <nvme/nvme_io.h> /* nvme_cleanup_cmd, nvme_req_destroy, NVME_IO_ASYNC,
                                    * nvme_io_context_pump, nvme_io_context_finish */
 #include <nvme/nvme_completion.h>
+#include <minlist.h>
 
 /* max number of retries a command may have */
 #define NVME_MAX_RETRIES 5U
@@ -60,6 +61,7 @@ static BYTE nvme_error_status(u16 status)
  *
  * @req: the failed request
  */
+#ifdef DEBUG
 static void nvme_log_err_normal(struct nvme_request *req)
 {
 	if (req->unit)
@@ -132,6 +134,7 @@ static void nvme_log_err_passthru(struct nvme_request *req)
 			le32(req->cmd.common.cdw14),
 			le32(req->cmd.common.cdw15));
 }
+#endif /* DEBUG (nvme_log_err_normal / nvme_log_err_passthru) */
 
 enum nvme_disposition
 {
@@ -220,6 +223,7 @@ static void nvme_retry_req(struct nvme_request *req)
  */
 static inline void nvme_log_error(struct nvme_request *req)
 {
+#ifdef DEBUG
 	if (unlikely(req->status))
 	{
 		if (nvme_req_is_passthrough(req))
@@ -227,6 +231,9 @@ static inline void nvme_log_error(struct nvme_request *req)
 		else
 			nvme_log_err_normal(req);
 	}
+#else
+	(void)req;
+#endif
 }
 
 /*

@@ -330,7 +330,7 @@ static int nvme_submit_abort_sqe(struct NVMeController *ctrl, u16 sqid, u16 cid)
 {
     struct nvme_command cmd;
 
-    mem_zero(&cmd, sizeof(cmd));
+    memset(&cmd, 0, sizeof(cmd));
     cmd.abort.opcode = nvme_admin_abort_cmd;
     /* cdw10: CID in high 16, SQID in low 16 — see NVMe spec §5.1. */
     cmd.abort.cid = le16(cid);

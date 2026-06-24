@@ -124,7 +124,7 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
                 Kprintf("[nvme] %s: slab_alloc PRP-list failed\n", __func__);
                 goto free_lists;
             }
-            mem_zero(list, list_bytes);
+            memset(list, 0, list_bytes);
             req->prp_pages[req->prp_page_count++] = list;
             list_pos = 0;
 
@@ -201,7 +201,7 @@ static int nvme_setup_dsm(struct nvme_request *req, struct nvme_dsm_range *range
     /* Device DMA-reads the range list; flush dirty CPU lines. */
     nvme_cache_flush(ranges, sizeof(*ranges) * NVME_DSM_MAX_RANGES, TRUE);
 
-    mem_zero(&req->cmd, sizeof(req->cmd));
+    memset(&req->cmd, 0, sizeof(req->cmd));
     req->cmd.dsm.opcode = nvme_cmd_dsm;
     req->cmd.dsm.command_id = req->cid;
     req->cmd.dsm.nsid = le32(req->unit ? req->unit->nsid : 0);
@@ -232,7 +232,7 @@ static void nvme_setup_flush(struct nvme_request *req)
              (ULONG)req,
              (ULONG)(req->unit ? req->unit->nsid : 0));
 
-    mem_zero(&req->cmd, sizeof(req->cmd));
+    memset(&req->cmd, 0, sizeof(req->cmd));
     req->cmd.common.opcode = nvme_cmd_flush;
     req->cmd.common.command_id = req->cid;
     req->cmd.common.nsid = le32(req->unit ? req->unit->nsid : 0);
@@ -247,7 +247,7 @@ static void nvme_setup_flush(struct nvme_request *req)
  */
 static void nvme_setup_write_zeroes(struct nvme_request *req, u64 slba, ULONG blocks)
 {
-    mem_zero(&req->cmd, sizeof(req->cmd));
+    memset(&req->cmd, 0, sizeof(req->cmd));
     req->cmd.write_zeroes.opcode = nvme_cmd_write_zeroes;
     req->cmd.write_zeroes.command_id = req->cid;
     req->cmd.write_zeroes.nsid = le32(req->unit ? req->unit->nsid : 0);
@@ -335,7 +335,7 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
         dma_buf = b;
     }
 
-    mem_zero(&req->cmd, sizeof(req->cmd));
+    memset(&req->cmd, 0, sizeof(req->cmd));
     req->cmd.rw.opcode = opcode;
     req->cmd.rw.command_id = req->cid;
     req->cmd.rw.nsid = le32(req->unit ? req->unit->nsid : 0);

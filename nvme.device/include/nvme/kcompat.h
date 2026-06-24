@@ -11,6 +11,8 @@
 #ifndef _NVME_KCOMPAT_H
 #define _NVME_KCOMPAT_H
 
+#include <exec/execbase.h> /* DMA_ReadFromRAM for CachePreDMA(); older NDKs don't pull it in transitively */
+
 #define USEC_PER_SEC 1000000UL
 
 /* Pre-DMA cache maintenance.  @to_device selects the memory->device direction
@@ -90,8 +92,6 @@ static inline int check_shl_overflow(u32 value, u32 shift, u32 *result)
 	*result = value << shift;
 	return 0;
 }
-
-int memcmp(const void *a, const void *b, unsigned long n);
 
 /* Wall-clock helper for NVMe's Timestamp feature payload.
  * Returns Unix-epoch milliseconds. */

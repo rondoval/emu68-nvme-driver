@@ -1,5 +1,10 @@
 # emu68-nvme-driver
 
+> **Releases:** this component ships as part of the
+> [emu68-driver-stack](https://github.com/rondoval/emu68-driver-stack) — the downloadable
+> `.lha` and bundled documentation are published there. This repository is source-only
+> and versioned via git tags.
+
 `emu68-nvme-driver` provides `nvme.device`, an AmigaOS block-storage driver for NVMe SSDs on
 Emu68 systems using the CM4 PCIe path.
 
@@ -211,6 +216,8 @@ From the superbuild root, the usual validation target is:
 ```sh
 cmake --build build --target emu68-nvme-driver
 ```
+
+Debug backend: append `-DEMU68_DEBUG_BACKEND=serial` (default `pistorm` | `serial` | `off`) — selected stack-wide via `emu68-common`. `pistorm` writes to the Emu68 `0xdeadbeef` debug hook; `serial` routes to the AmigaOS serial console (`debug.lib`, not ROM-able); `off` compiles debug out.
 
 The install step places `nvme.device` in `DEVS:` and the utilities in `C:` inside the install
 tree produced by the driver stack.

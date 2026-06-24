@@ -1,6 +1,9 @@
 cmake_minimum_required(VERSION 3.14.0)
 project(nvme.device VERSION ${CMAKE_PROJECT_VERSION})
 
+# Debug-output backend defines (EMU68_DEBUG_BACKEND, see emu68-common).
+emu68_debug_backend_definitions()
+
 # Toolchain and compile options
 add_link_options(
     -ffreestanding
@@ -11,7 +14,7 @@ add_link_options(
 )
 
 add_compile_options(
-    -Os
+    -O3
     -m68040
     -Wall
     -Wextra
@@ -20,7 +23,6 @@ add_compile_options(
     -Wshadow
     -Wmissing-prototypes
     -Wstrict-prototypes
-    -DDEBUG
     -fomit-frame-pointer
 )
 
@@ -78,8 +80,9 @@ target_link_libraries(nvme.device
                            # and nvme_hmb.c's 64-bit ceil-divide for hmmaxd_cap (__udivdi3)
 )
 
-# ROM-able: no writable .data/.bss may sneak in
-emu68_rom_check(nvme.device)
+# ROM-able: no writable .data/.bss may sneak in. For the serial backend this
+# instead links debug.lib (+ __divsi3 glue) and skips the ROM check.
+emu68_debug_backend_finalize(nvme.device ROMABLE)
 
 install(
     PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvme.device
