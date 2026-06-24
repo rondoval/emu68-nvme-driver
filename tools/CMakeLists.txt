@@ -40,8 +40,12 @@ add_executable(nvmeadm
 target_compile_options(nvmeinfo PRIVATE ${NVME_TOOL_COMPILE_OPTIONS})
 target_compile_options(nvmeadm PRIVATE ${NVME_TOOL_COMPILE_OPTIONS})
 
+target_compile_definitions(nvmeinfo PRIVATE
+    VERSTAG="$VER: nvmeinfo ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR} ${CURRENT_DATE}"
+)
+
 target_compile_definitions(nvmeadm PRIVATE
-    VERSTAG="$VER: nvmeadm ${PROJECT_VERSION} ${CURRENT_DATE}"
+    VERSTAG="$VER: nvmeadm ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR} ${CURRENT_DATE}"
 )
 
 target_link_options(nvmeinfo PRIVATE ${NVME_TOOL_LINK_OPTIONS})
