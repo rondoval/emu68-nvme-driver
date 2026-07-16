@@ -139,7 +139,7 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
                  * lists, which are always large (4 KiB) pages. */
                 u64 *prev = (u64 *)req->prp_pages[req->prp_page_count - 2];
                 prev[NVME_PRP_ENTRIES_PER_PAGE - 1] = le64((u64)(ULONG)list);
-                nvme_cache_flush(prev, NVME_CTRL_PAGE_SIZE, TRUE); /* device reads PRP list */
+                nvme_cache_flush_ns(prev, NVME_CTRL_PAGE_SIZE, TRUE); /* device reads PRP list; SQE flush closes */
             }
         }
 
@@ -153,7 +153,7 @@ static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
     /* Final (possibly only) list page: nothing chains off it, so
      * flush here.  Flush exactly list_bytes — a small page is only 256 B. */
     if (list)
-        nvme_cache_flush(list, list_bytes, TRUE); /* device reads PRP list */
+        nvme_cache_flush_ns(list, list_bytes, TRUE); /* device reads PRP list; SQE flush closes */
 
     req->flags |= NVME_REQ_PRP_LIST | NVME_REQ_PRP_SLAB;
     if (small)
@@ -356,7 +356,7 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
      * buffer once — see nvme_io_submit_rw. */
     if (dma_buf && bytes &&
         !(req->ctx && req->ctx->data_precached && req->bounce_buf == NULL))
-        nvme_cache_flush(dma_buf, bytes, opcode == nvme_cmd_write); /* write: device reads data */
+        nvme_cache_flush_ns(dma_buf, bytes, opcode == nvme_cmd_write); /* write: device reads data; SQE flush closes */
 
     return 0;
 }
@@ -964,7 +964,9 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
      * is done once in nvme_io_context_finish. */
     if (!nvme_needs_bounce(&ctrl->dma_ctx, buffer, (ULONG)bytes))
     {
-        nvme_cache_flush(buffer, (ULONG)bytes, opcode == nvme_cmd_write);
+        /* NoSync: the first chunk's SQE flush closes the barrier before any
+         * doorbell; if the pump never submits, nothing was armed */
+        nvme_cache_flush_ns(buffer, (ULONG)bytes, opcode == nvme_cmd_write);
         ctx->data_precached = 1;
     }
 

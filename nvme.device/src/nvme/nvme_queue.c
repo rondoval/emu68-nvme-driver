@@ -176,6 +176,7 @@ static void drain_cq(struct nvme_queue *q)
     u16 head = q->cq_head;
     u16 phase = q->cq_phase;
     int drained = 0;
+    ULONG inval_line = 1; /* never a valid 64-byte line address */
 
     if (!q->cq)
         return;
@@ -184,9 +185,19 @@ static void drain_cq(struct nvme_queue *q)
     {
         struct nvme_completion *cqe = &q->cq[head];
 
-        /* Invalidate the CQE cache line so we see what the controller
-         * DMA-wrote rather than a stale CPU-cached value. */
-        nvme_cache_inval(cqe, sizeof(*cqe));
+        /* Invalidate the CQE's cache line so we see what the controller
+         * DMA-wrote rather than a stale CPU-cached value — but only once
+         * per line: four 16-byte CQEs share one, and one invalidate makes
+         * all four visible as of that moment. A neighbour the controller
+         * writes AFTER our invalidate shows a stale phase bit, the loop
+         * breaks, and the next drain_cq pass (fresh inval_line) re-
+         * invalidates before reading it — no completion can be missed. */
+        ULONG line = (ULONG)cqe & ~63UL;
+        if (line != inval_line)
+        {
+            nvme_cache_inval(cqe, sizeof(*cqe));
+            inval_line = line;
+        }
 
         const u16 status_le = le16(cqe->status);
         const u16 cqe_phase = status_le & 1;
