@@ -57,6 +57,16 @@ RDB partitions keep their existing behavior throughout, including autoboot.
 
 ## Reliability
 
+### SCSI emulation no longer overruns the caller's buffer
+
+`HD_SCSICMD` responses were written at full length regardless of how much the
+caller asked for.  INQUIRY was the visible case — it returns 44 bytes where the
+SCSI standard defines 36, so a tool passing a 36-byte buffer had 8 bytes written
+past the end of it: xSysInfo's drives view gurus `8000000B` on its SCSI check.
+Responses are now cut to the requested length.  MODE SENSE, REQUEST SENSE, READ
+CAPACITY and the VPD pages had the same flaw, as did READ/WRITE, where a block
+count larger than the buffer could overrun it over DMA and is now refused.
+
 ### Exact partition extents on MBR/GPT disks
 
 The old mounter fitted legacy partitions to a synthetic CHS geometry, rounding
