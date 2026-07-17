@@ -4,6 +4,9 @@ project(nvme.device VERSION ${CMAKE_PROJECT_VERSION})
 # Debug-output backend defines (EMU68_DEBUG_BACKEND, see emu68-common).
 emu68_debug_backend_definitions()
 
+# cache_ops.h LVO-fallback define (EMU68_FORCE_LVO_CACHE_OPS, see emu68-common).
+emu68_cache_ops_definitions()
+
 # Toolchain and compile options
 add_link_options(
     -ffreestanding
@@ -70,6 +73,17 @@ target_include_directories(nvme.device
         include
         mounter
 )
+
+# Route the mounter submodule's diagnostics into the debug backend; device.c
+# provides the mounter_log sink.  Both compile away when the backend is off.
+if(NOT EMU68_DEBUG_BACKEND STREQUAL "off")
+    target_compile_definitions(nvme.device PRIVATE MOUNTER_LOG)
+endif()
+
+# Third-party submodule; not -Wconversion-clean under this project's strict
+# warning set.  Bugfixes go to the fork (branch poseidon-fixes).
+set_source_files_properties(mounter/mounter.c PROPERTIES
+    COMPILE_OPTIONS "-Wno-conversion;-Wno-sign-conversion;-Wno-missing-prototypes;-Wno-pointer-sign;-Wno-shadow;-Wno-unused-parameter;-Wno-empty-body")
 
 target_link_libraries(nvme.device
     PRIVATE

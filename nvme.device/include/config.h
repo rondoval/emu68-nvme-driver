@@ -63,4 +63,38 @@
  * NVMe spec §5.15.4: Identify Active NSID List returns up to 1024 NSIDs. */
 #define NVME_MAX_NS             1024
 
+/* Automount recipes for MBR/GPT/superfloppy filesystems (mounter submodule).
+ * RDB partitions carry their own filesystem/handler info and ignore these. */
+#ifndef NVME_FAT_DOSTYPE
+#define NVME_FAT_DOSTYPE        0x46415401u /* 'FAT\1' (fat95) */
+#endif
+
+#ifndef NVME_FAT_HANDLER
+#define NVME_FAT_HANDLER        "L:fat95"
+#endif
+
+#ifndef NVME_NTFS_DOSTYPE
+#define NVME_NTFS_DOSTYPE       0x4E544653u /* 'NTFS' */
+#endif
+
+#ifndef NVME_NTFS_HANDLER
+#define NVME_NTFS_HANDLER       "L:NTFileSystem3G"
+#endif
+
+/* The mounter ensures a trailing digit and bumps past collisions,
+ * so partitions come up as NVME0:, NVME1:, ... */
+#ifndef NVME_LEGACY_DOSNAME
+#define NVME_LEGACY_DOSNAME     "NVME"
+#endif
+
+/* Fixed internal disk: a more generous filesystem cache than the
+ * mounter's removable-media default. */
+#ifndef NVME_LEGACY_BUFFERS
+#define NVME_LEGACY_BUFFERS     500
+#endif
+
+#ifndef NVME_LEGACY_MAXTRANSFER
+#define NVME_LEGACY_MAXTRANSFER 0x00FFFFFFu
+#endif
+
 #endif /* NVME_DEVICE_CONFIG_H */

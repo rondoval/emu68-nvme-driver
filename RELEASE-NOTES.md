@@ -1,3 +1,132 @@
+# Release notes — nvme.device 1.2
+
+Changes since v1.1.
+
+> Warning: still a young storage driver — keep current backups and use it at
+> your own risk.
+
+---
+
+## Breaking changes
+
+Automounted **MBR/GPT partitions get new DOS device names**: the mounter rework
+below names them from the driver — `NVME0:`, `NVME1:`, … — instead of the old
+hardcoded `MS0:`, `MS1:`, ….  RDB partitions are unaffected and keep the names
+their RDB carries.  Startup-Sequence lines, assigns and `DEVS:DOSDrivers` entries
+that referred to `MS<n>:` need updating.
+
+Those partitions also load their handler from `L:` (`L:fat95`,
+`L:NTFileSystem3G`) when the dostype is not already registered in
+`FileSystem.resource`, so those files should be present for MBR/GPT disks — a
+partition whose handler resolves to neither is skipped cleanly rather than
+mounted broken.
+
+---
+
+## New features
+
+### Automount: shared `mounter` fork with FAT and NTFS recipes
+
+The driver drops its vendored copy of the A4091 mounter for the
+[`rondoval/mounter`](https://github.com/rondoval/mounter) fork (branch
+`poseidon-fixes`), carried as a submodule and shared with the Poseidon USB
+mass-storage class.  Rather than the mounter hardcoding filesystem policy, the
+driver now hands it a *recipe* per filesystem family — dostype, handler file,
+DOS name, buffers, MaxTransfer — as `NVME_*` constants in `include/config.h`:
+
+- **FAT** (`fat95`) and **NTFS** (`NTFileSystem3G`) partitions on MBR, GPT and
+  superfloppy (filesystem at block 0) disks mount, with the handler loaded from
+  `L:` when the dostype isn't in `FileSystem.resource`.  Previously only FAT
+  mounted, and only if `fat95` was already registered.
+- **exFAT and unrecognized boot sectors are skipped** instead of being mounted
+  as FAT: boot sectors are now sniffed rather than assumed.
+- **GPT is gated and validated** — protective-MBR entry plus header position,
+  size and CRC32 — and the extended-MBR chain is walked with correct
+  container-relative links.
+- Partition names are bumped past collisions, checked against both the pre-DOS
+  MountList and the live DOS lists.
+- **Every probed namespace is offered to the mounter**, not just units 0–7: the
+  driver passes an explicit `{count, unit…}` list instead of leaving the mounter
+  to scan the classic SCSI target range.  Probing itself is now shared between
+  the init-time automount and the first `OpenDevice`, and is retried on open if
+  the support libraries weren't available at init.
+
+RDB partitions keep their existing behavior throughout, including autoboot.
+
+---
+
+## Reliability
+
+### Exact partition extents on MBR/GPT disks
+
+The old mounter fitted legacy partitions to a synthetic CHS geometry, rounding
+partitions whose start is not cylinder-aligned — the classic LBA-63 MBR layout
+among them — so `de_LowCyl` could land one block off and writes through such a
+mount would corrupt data.  Legacy partitions now map block-for-block (1 block =
+1 "cylinder"), so extents are exact.
+
+### Partition tables past 4 GB, and hardened parsing
+
+Reads beyond 4 GB use `TD_READ64`, so the boot sector of a partition located
+past the first 4 GB of a large SSD — and the GPT backup header at the end of the
+disk — are read at their real offset instead of a wrapped 32-bit one.  Malformed
+on-disk structures are now clamped or rejected rather than trusted: RDB
+environment vectors, drive-name length bytes, hunk counts / sizes and relocation
+offsets (which could overflow the heap or stack), PART/FSHD chain cycles, and
+implausible partition tables.
+
+---
+
+## Performance
+
+### Batched and inlined DMA cache maintenance
+
+Cache maintenance moves onto `emu68-common` 1.7.0's `cache_ops.h`:
+
+- The private `DMAF_NoSync` flag lets a batch of range ops pay **one** `dsb sy`
+  instead of one per op.  Per command, the PRP-list flushes and the data flush
+  now carry it; the SQE flush in `nvme_submit_io` — always the last clean before
+  any doorbell write, immediate or batched — closes the batch.
+- `nvme_cache_flush` / `nvme_cache_inval` emit the private LINE-F range opcode
+  **inline** instead of calling exec's `CachePreDMA` / `CachePostDMA`, skipping
+  ~3 JIT dispatcher round-trips per call — the dominant cost for small ranges.
+  Building with `-DEMU68_FORCE_LVO_CACHE_OPS=ON` routes them back through the
+  exec LVO, for an Emu68 that doesn't have the range opcode; release CI builds
+  set it, so shipped binaries keep the LVO path.
+- Completion-queue draining invalidates **once per 64-byte cache line** rather
+  than once per CQE: four 16-byte CQEs share a line, and one invalidate makes
+  all four visible.  A CQE the controller writes after that invalidate shows a
+  stale phase bit, the drain loop stops, and the next pass re-invalidates before
+  reading it — no completion can be missed.
+
+---
+
+## Build & tooling
+
+### NDK 3.2 only
+
+1.1's NDK 3.9 portability shims are reverted — the driver (and CI, now on the
+`amiga-build-container` image) targets **NDK 3.2 only**.  The local `TD_READ64` …
+`TD_FORMAT64` fallback definitions are gone, since NDK 3.2's
+`<devices/trackdisk.h>` defines them, as are the defensive `<exec/execbase.h>` /
+`<minlist.h>` includes that NDK 3.2 reaches through `<proto/exec.h>`.  The
+type-correctness fixes from that work are kept.  No functional change.
+
+### Mounter diagnostics follow the debug backend
+
+The mounter fork's output is routed into the stack's debug backend
+(`MOUNTER_LOG`, gated on `EMU68_DEBUG_BACKEND != off`), so automount decisions
+appear in the same log as the rest of the driver.  Builds with the backend off
+compile it out.
+
+### Dependencies
+
+Building now requires **`emu68-common` 1.7.0** or later (`cache_ops.h`,
+`barrier.h`, and the standard `strncmp` the mounter fork links against), and a
+`git submodule update --init` for the mounter.  The runtime requirement of
+`bcmpcie.library` 2.0 introduced in 1.1 is unchanged.
+
+
 # Release notes — nvme.device 1.1
 
 Changes since v1.0.

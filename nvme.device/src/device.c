@@ -38,12 +38,31 @@ extern const UBYTE endOfCode;
 static const char deviceName[] = DEVICE_NAME;
 static const char deviceIdString[] = DEVICE_IDSTRING;
 
+#ifdef MOUNTER_LOG
+/* MOUNTER_LOG sink: route the mounter submodule's diagnostics (%l-normalized
+ * RawDoFmt format strings) to the debug backend.  Prototype declared here
+ * because the mounter only declares it internally. */
+void mounter_log(const char *fmt, ...);
+void mounter_log(const char *fmt, ...)
+{
+    va_list args;
+    va_start(args, fmt);
+#pragma GCC diagnostic push
+#pragma GCC diagnostic ignored "-Wstrict-prototypes"
+    RawDoFmt((CONST_STRPTR)fmt, args, (APTR)putch, NULL);
+#pragma GCC diagnostic pop
+    va_end(args);
+}
+#endif
+
 /*
  * Forward declarations needed before _doInit and the Resident struct.
  */
 static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"));
 APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *_SysBase asm("a6"));
 static const APTR funcTable[];
+static s32 devEnsureProbed(struct NVMeDevice *base);
+static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase);
 
 static struct Resident const nvmeDeviceResident __attribute__((used, no_reorder)) = {
     RTC_MATCHWORD,
@@ -70,7 +89,6 @@ static struct Resident const nvmeDeviceResident __attribute__((used, no_reorder)
  */
 static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"))
 {
-    (void)SysBase;
     /* MakeLibrary macro uses old-style '()' function pointer — suppress the warning */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstrict-prototypes"
@@ -87,18 +105,8 @@ static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase 
 
     AddDevice((struct Device *)base);
 
-    struct MountStruct ms = {
-        .deviceName = (const UBYTE *)DEVICE_NAME,
-        .unitNum = NULL,
-        .creatorName = (const UBYTE *)DEVICE_NAME,
-        .configDev = NULL,
-        .SysBase = SysBase,
-        .luns = FALSE,
-        .slowSpinup = FALSE,
-        .cdBoot = FALSE,
-        .ignoreLast = TRUE,
-    };
-    MountDrive(&ms);
+    if (devEnsureProbed(base) == ERR_NO_ERROR)
+        devMountUnits(base, SysBase);
 
     return (struct Library *)base;
 }
@@ -156,6 +164,88 @@ static s32 nvme_open_libraries(struct NVMeDevice *base)
     return ERR_NO_ERROR;
 }
 
+/* Probe once: open support libraries and enumerate all PCIe NVMe controllers,
+ * populating base->units.  Shared by the init-time automount and the first
+ * OpenDevice; on library failure probed stays FALSE so a later open retries. */
+static s32 devEnsureProbed(struct NVMeDevice *base)
+{
+    if (base->probed)
+        return ERR_NO_ERROR;
+
+    s32 err = nvme_open_libraries(base);
+    if (err != ERR_NO_ERROR)
+        return err;
+
+    /* Best-effort: if no controllers are found the unit list stays empty
+     * and all opens will return IOERR_OPENFAIL. */
+    nvme_probe_all(base);
+    base->probed = TRUE;
+    return ERR_NO_ERROR;
+}
+
+/* MBR/GPT/superfloppy automount recipes; values in config.h.  RDB partitions
+ * carry their own filesystem/handler info and don't use these. */
+static const struct MountFS fatRecipe = {
+    .dosType = NVME_FAT_DOSTYPE,
+    .handler = (const UBYTE *)NVME_FAT_HANDLER,
+    .dosName = (const UBYTE *)NVME_LEGACY_DOSNAME,
+    .buffers = NVME_LEGACY_BUFFERS,
+    .maxTransfer = NVME_LEGACY_MAXTRANSFER,
+};
+
+static const struct MountFS ntfsRecipe = {
+    .dosType = NVME_NTFS_DOSTYPE,
+    .handler = (const UBYTE *)NVME_NTFS_HANDLER,
+    .dosName = (const UBYTE *)NVME_LEGACY_DOSNAME,
+    .buffers = NVME_LEGACY_BUFFERS,
+    .maxTransfer = NVME_LEGACY_MAXTRANSFER,
+};
+
+/* Mount every probed namespace: RDB partitions plus MBR/GPT/superfloppy
+ * filesystems via the recipes above.  Uses the mounter's explicit
+ * {count, unit...} list: unit numbers are contiguous 0..nextUnitNumber-1
+ * right after nvme_probe_all() and may exceed the classic 0-7 scan range. */
+static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase)
+{
+    ULONG count = base->nextUnitNumber;
+    if (count == 0)
+        return;
+
+    ULONG *unitList = AllocMem((count + 1) * sizeof(ULONG), MEMF_PUBLIC);
+    if (unitList == NULL)
+        return;
+
+    unitList[0] = count;
+    for (ULONG i = 0; i < count; i++)
+        unitList[i + 1] = i;
+
+    struct MountStruct ms = {
+        .deviceName = (const UBYTE *)DEVICE_NAME,
+        .unitNum = unitList,
+        .creatorName = (const UBYTE *)DEVICE_NAME,
+        .configDev = NULL, /* fake ConfigDev auto-created if a bootable partition is found */
+        .SysBase = SysBase,
+        .luns = FALSE,
+        .slowSpinup = FALSE,
+        .ignoreLast = TRUE, /* namespaces are independent disks */
+        .hostId = 255,      /* non-SCSI controller */
+        .flags = MSF_NO_CD, /* namespaces report DG_DIRECT_ACCESS */
+        .fatFS = &fatRecipe,
+        .ntfsFS = &ntfsRecipe,
+        .cdFS = NULL,
+        .dmaAlign = DMA_ALIGN_MIN, /* recipe FS buffers never take the bounce path */
+    };
+
+    LONG mounted = MountDrive(&ms);
+    (void)mounted; /* only read by Kprintf when the debug backend is on */
+    Kprintf("[nvme] %s: mounted %ld partition(s) on %lu unit(s)\n", __func__, mounted, count);
+    /* MountDrive overwrote the list entries with per-unit results */
+    for (ULONG i = 0; i < count; i++)
+        KprintfH("[nvme] %s: unit %lu: %ld\n", __func__, i, (LONG)unitList[i + 1]);
+
+    FreeMem(unitList, (count + 1) * sizeof(ULONG));
+}
+
 /* reset_guard prepare callback (interrupt-safe). */
 static void nvme_device_reset_prepare(APTR user)
 {
@@ -202,19 +292,11 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
     KprintfH("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
 
     /* Probe once: enumerate all NVMe controllers and build the unit list */
-    if (!base->probed)
+    if (devEnsureProbed(base) != ERR_NO_ERROR)
     {
-        if (nvme_open_libraries(base) != ERR_NO_ERROR)
-        {
-            Kprintf("[nvme] %s: failed to open support libraries\n", __func__);
-            io->io_Error = IOERR_OPENFAIL;
-            return;
-        }
-
-        /* Best-effort: if no controllers are found the unit list stays empty
-         * and all subsequent opens will return IOERR_OPENFAIL. */
-        nvme_probe_all(base);
-        base->probed = TRUE;
+        Kprintf("[nvme] %s: failed to open support libraries\n", __func__);
+        io->io_Error = IOERR_OPENFAIL;
+        return;
     }
 
     /* Look up the pre-allocated unit by its global unit number.
