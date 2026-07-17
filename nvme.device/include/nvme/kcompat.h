@@ -11,26 +11,35 @@
 #ifndef _NVME_KCOMPAT_H
 #define _NVME_KCOMPAT_H
 
-#include <exec/execbase.h> /* DMA_ReadFromRAM for CachePreDMA(); older NDKs don't pull it in transitively */
+#include <cache_ops.h> /* DMAF_NoSync batch contract (emu68-common) */
+
 
 #define USEC_PER_SEC 1000000UL
 
-/* Pre-DMA cache maintenance.  @to_device selects the memory->device direction
- * (DMA_ReadFromRAM): the device will READ this buffer (NVMe write, SQE, PRP
- * list), so a clean is enough and the lines stay valid.  When clear the device
- * will WRITE the buffer (NVMe read), so it is clean+invalidated. */
+/* Pre-DMA cache maintenance (inline LINE-F ops via cache_ops.h).  @to_device
+ * selects the memory->device direction (DMA_ReadFromRAM): the device will
+ * READ this buffer (NVMe write, SQE, PRP list), so a clean is enough and the
+ * lines stay valid.  When clear the device will WRITE the buffer (NVMe read),
+ * so it is clean+invalidated. */
 static inline void nvme_cache_flush(void *addr, ULONG len, BOOL to_device)
 {
-	ULONG cache_len = len;
-	CachePreDMA((APTR)addr, &cache_len, to_device ? DMA_ReadFromRAM : 0);
+	cache_pre_dma((APTR)addr, len, to_device ? DMA_ReadFromRAM : 0);
+}
+
+/* NoSync variant: defers the batch's closing barrier to a later non-NoSync op.
+ * In this driver that closer is ALWAYS the SQE flush in nvme_submit_io — the
+ * unconditional last clean before any doorbell (immediate or batched), so PRP
+ * and data flushes for the same command may all ride NoSync. See cache_ops.h. */
+static inline void nvme_cache_flush_ns(void *addr, ULONG len, BOOL to_device)
+{
+	cache_pre_dma((APTR)addr, len, (to_device ? DMA_ReadFromRAM : 0) | DMAF_NoSync);
 }
 
 /* Post-DMA: invalidate stale CPU lines after the device wrote @addr (NVMe read,
  * CQE).  Not needed after a device read (the library would no-op it anyway). */
 static inline void nvme_cache_inval(void *addr, ULONG len)
 {
-	ULONG cache_len = len;
-	CachePostDMA((APTR)addr, &cache_len, 0);
+	cache_post_dma((APTR)addr, len, 0);
 }
 
 /* ---- bitops (uniprocessor) --------------------------------------- */

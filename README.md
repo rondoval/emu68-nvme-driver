@@ -52,14 +52,16 @@ The following areas are intentionally outside the scope of this driver:
 - AmigaOS 3.x running under Emu68
 - PiStorm accelerator with CM4
 - Emu68 exposing the Raspberry Pi PCIe path needed for NVMe access
-- `gic400.library` in `LIBS:` for interrupt delivery
-- `bcmpcie.library` in `LIBS:` for BCM2711 PCIe bring-up, BAR assignment, and MSI support
+- `bcmpcie.library` 2.0 or later in `LIBS:` for BCM2711 PCIe bring-up, BAR assignment, and
+  interrupt allocation
+- `gic400.library` in `LIBS:` — used underneath by `bcmpcie.library` for interrupt delivery
 - an NVMe SSD reachable through the BCM2711 PCIe controller
 
 For building from source you also need:
 
 - Bebbo's m68k AmigaOS cross toolchain in `/opt/m68k-amigaos`
 - a common install prefix containing the companion packages used by this driver stack
+- the `mounter` submodule checked out (`git submodule update --init`)
 
 ---
 
@@ -79,12 +81,34 @@ Runtime companion files that must already be present:
 | `gic400.library` | `LIBS:` |
 | `bcmpcie.library` | `LIBS:` |
 
+Optional, and only needed to automount non-Amiga partitions on MBR/GPT/superfloppy disks — the
+driver loads these from `L:` when the dostype is not already registered in `FileSystem.resource`:
+
+| File | Destination |
+|---|---|
+| `fat95` | `L:` |
+| `NTFileSystem3G` | `L:` |
+
 `nvme.device` is a local storage driver. It does not require a separate filesystem-specific
 configuration file, but it does depend on the PCIe and interrupt libraries above being installed
 first.
 
-For RDB-based automount and autoboot handling, the driver uses the
-[`mounter`](https://github.com/A4091/mounter) code from the A4091 project.
+### Automount
+
+Automount and autoboot use the [`mounter`](https://github.com/rondoval/mounter) submodule (branch
+`poseidon-fixes`, a fork of the A4091 project's mounter), shared with the Poseidon USB mass-storage
+class. Every probed namespace is scanned at init:
+
+- **RDB** partitions mount with the filesystem, handler and DOS name their RDB carries, and boot
+  by RDB boot priority. Only a name that collides with an existing device is renamed.
+- **MBR, GPT and superfloppy** disks mount their FAT and NTFS filesystems as `NVME0:`, `NVME1:`, …
+  (collisions bumped), through `fat95` / `NTFileSystem3G`. exFAT and unrecognized boot sectors are
+  skipped. A partition flagged active is registered at boot priority 0, others at -1 — the same
+  rule the RDB path follows.
+
+The recipes driving the second case — dostype, handler file, DOS name, buffer count, MaxTransfer —
+are `NVME_*` constants in [`nvme.device/include/config.h`](nvme.device/include/config.h), so a build
+can retarget them at a different filesystem.
 
 ---
 
@@ -94,13 +118,15 @@ For RDB-based automount and autoboot handling, the driver uses the
 
 - PCIe-attached NVMe controller discovery and initialization through `bcmpcie.library`
 - controller reset, reinitialization, and basic failure recovery
-- MSI-backed interrupt handling through `gic400.library`
+- interrupt handling through `bcmpcie.library`'s typed multi-vector API, preferring MSI-X, then
+  MSI, then INTx
 - admin queue plus I/O queue operation adapted to the AmigaOS task model
 - namespace discovery for supported NVM namespaces
 - namespace filtering so only plain block namespaces are exposed as Amiga units
 - support for namespaces using 512-byte, 1 KiB, 2 KiB, and 4 KiB logical block sizes
 - device-specific quirk handling carried over from Linux where it is relevant to this port
 - Host Memory Buffer setup for DRAM-less controllers that expose HMB capability
+- automount of RDB partitions, plus FAT and NTFS filesystems on MBR/GPT/superfloppy disks
 
 ### Block I/O functionality
 
@@ -217,7 +243,9 @@ From the superbuild root, the usual validation target is:
 cmake --build build --target emu68-nvme-driver
 ```
 
-Debug backend: append `-DEMU68_DEBUG_BACKEND=serial` (default `pistorm` | `serial` | `off`) — selected stack-wide via `emu68-common`. `pistorm` writes to the Emu68 `0xdeadbeef` debug hook; `serial` routes to the AmigaOS serial console (`debug.lib`, not ROM-able); `off` compiles debug out.
+Debug backend: append `-DEMU68_DEBUG_BACKEND=serial` (default `pistorm` | `serial` | `off`) — selected stack-wide via `emu68-common`. `pistorm` writes to the Emu68 `0xdeadbeef` debug hook; `serial` routes to the AmigaOS serial console (`debug.lib`, not ROM-able); `off` compiles debug out. The `mounter` submodule's automount diagnostics follow the same setting.
+
+Cache ops: DMA cache maintenance emits Emu68's private LINE-F range opcode inline. Append `-DEMU68_FORCE_LVO_CACHE_OPS=ON` to route it through the exec `CachePreDMA` / `CachePostDMA` LVOs instead, which is needed when running against an Emu68 build that lacks the opcode.
 
 The install step places `nvme.device` in `DEVS:` and the utilities in `C:` inside the install
 tree produced by the driver stack.
@@ -232,8 +260,7 @@ reshaped around AmigaOS constraints:
 
 - controller work is driven by Amiga tasks and message ports rather than Linux workqueues and blk-mq
 - DMA-capable buffers use the common Emu68 allocation helpers
-- PCIe access goes through `bcmpcie.library`
-- interrupt delivery goes through `gic400.library`
+- PCIe access and interrupt allocation go through `bcmpcie.library`
 - user-facing diagnostics are exposed through Amiga device commands and small CLI tools, not sysfs
 
 That keeps the code close enough to Linux to reuse mature NVMe logic where it helps, while still

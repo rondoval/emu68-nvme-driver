@@ -247,10 +247,28 @@ static BOOL unit_supports_dsm(struct NVMeUnit *unit)
     return unit && unit->ctrl && (unit->ctrl->oncs & NVME_CTRL_ONCS_DSM) != 0;
 }
 
-/* Helper: clamp the response to scsi_Length and stamp scsi_Actual. */
-static void scsi_set_actual(struct SCSICmd *cmd, ULONG produced)
+/*
+ * scsi_emit - the only path that writes to the caller's data buffer.
+ *
+ * Every emulated response is assembled in a local buffer and handed
+ * here, so no handler can overrun scsi_Data by forgetting a bound check.
+ * We transfer the smallest of what we produced, what the CDB asked for
+ * (@alloc) and what the caller's buffer holds (scsi_Length); scsi_Actual
+ * reports what was transferred.  Length fields *inside* the response
+ * still describe the full data available rather than the truncated
+ * transfer, per SPC-4 §4.3.5.6 — that's how an initiator learns to
+ * re-issue with a larger buffer.
+ */
+static inline void scsi_emit(struct SCSICmd *cmd, const void *src, ULONG len, ULONG alloc)
 {
-    cmd->scsi_Actual = (cmd->scsi_Length >= produced) ? produced : cmd->scsi_Length;
+    if (len > alloc)
+        len = alloc;
+    if (len > cmd->scsi_Length)
+        len = cmd->scsi_Length;
+
+    if (len)
+        CopyMem((CONST_APTR)src, cmd->scsi_Data, len);
+    cmd->scsi_Actual = len;
 }
 
 static inline void scsi_store_be16(UBYTE *dst, UWORD value)
@@ -267,50 +285,69 @@ static inline void scsi_store_be32(UBYTE *dst, ULONG value)
     dst[3] = (UBYTE)value;
 }
 
+/* CDB fields land on arbitrary offsets, so read them byte-wise rather
+ * than casting — a UWORD/ULONG load off an odd address is a hazard we
+ * don't need to take. */
+static inline UWORD scsi_load_be16(const UBYTE *src)
+{
+    return (UWORD)(((UWORD)src[0] << 8) | (UWORD)src[1]);
+}
+
+static inline ULONG scsi_load_be32(const UBYTE *src)
+{
+    return ((ULONG)src[0] << 24) | ((ULONG)src[1] << 16) |
+           ((ULONG)src[2] << 8) | (ULONG)src[3];
+}
+
 /*
  * scsi_inquiry_standard - the original "no EVPD" INQUIRY response,
  * pulled into its own helper so the EVPD dispatcher can fall through to
  * the SCSI-2 standard data when the client doesn't ask for a VPD page.
  */
 static BYTE scsi_inquiry_standard(struct NVMeUnit *unit,
-                                  struct SCSICmd *cmd)
+                                  struct SCSICmd *cmd, ULONG alloc)
 {
-    struct SCSI_Inquiry *data = (struct SCSI_Inquiry *)cmd->scsi_Data;
     struct NVMeController *ctrl = unit ? unit->ctrl : NULL;
     BOOL have_id = ctrl && ctrl->id_strings.model[0] != 0;
 
-    if (data == NULL)
+    if (cmd->scsi_Data == NULL)
         return IOERR_BADADDRESS;
 
-    data->peripheral_type = 0; /* direct-access block device */
-    data->removable_media = 0;
-    data->version = 2; /* SCSI-2 */
-    data->response_format = 2;
-    data->additional_length = (UBYTE)(sizeof(struct SCSI_Inquiry) - 4);
-    data->flags[0] = data->flags[1] = data->flags[2] = 0;
+    /* The serial field past byte 35 is a vendor-specific extension: a
+     * client that asks for the standard 36 bytes must get 36 bytes, so
+     * build the full response here and let scsi_emit() cut it to the
+     * requested length. */
+    struct SCSI_Inquiry data;
+
+    data.peripheral_type = 0; /* direct-access block device */
+    data.removable_media = 0;
+    data.version = 2; /* SCSI-2 */
+    data.response_format = 2;
+    data.additional_length = (UBYTE)(sizeof(data) - 4);
+    data.flags[0] = data.flags[1] = data.flags[2] = 0;
 
     /* Vendor is always "NVMe    " (8 bytes) — the NVMe spec doesn't
      * carry a separate vendor field, just a 40-byte model that
      * usually starts with the maker. */
-    CopyMem((CONST_APTR) "NVMe    ", (APTR)data->vendor, 8);
+    CopyMem((CONST_APTR) "NVMe    ", (APTR)data.vendor, 8);
 
     if (have_id)
     {
         /* Product: first 16 chars of the 40-byte model string. */
-        copy_padded((UBYTE *)data->product, ctrl->id_strings.model, 16);
+        copy_padded((UBYTE *)data.product, ctrl->id_strings.model, 16);
         /* Revision: first 4 chars of the 8-byte firmware string. */
-        copy_padded((UBYTE *)data->revision, ctrl->id_strings.firmware, 4);
+        copy_padded((UBYTE *)data.revision, ctrl->id_strings.firmware, 4);
         /* Serial: first 8 chars of the 20-byte serial string. */
-        copy_padded((UBYTE *)data->serial, ctrl->id_strings.serial, 8);
+        copy_padded((UBYTE *)data.serial, ctrl->id_strings.serial, 8);
     }
     else
     {
-        CopyMem((CONST_APTR) "Storage Device  ", (APTR)data->product, 16);
-        CopyMem((CONST_APTR) "0001", (APTR)data->revision, 4);
-        CopyMem((CONST_APTR) "        ", (APTR)data->serial, 8);
+        CopyMem((CONST_APTR) "Storage Device  ", (APTR)data.product, 16);
+        CopyMem((CONST_APTR) "0001", (APTR)data.revision, 4);
+        CopyMem((CONST_APTR) "        ", (APTR)data.serial, 8);
     }
 
-    scsi_set_actual(cmd, sizeof(struct SCSI_Inquiry));
+    scsi_emit(cmd, &data, sizeof(data), alloc);
     return 0;
 }
 
@@ -323,31 +360,25 @@ static BYTE scsi_inquiry_standard(struct NVMeUnit *unit,
  * and 0xB2 (Logical Block Provisioning).
  */
 static BYTE scsi_inquiry_vpd_00(struct NVMeUnit *unit,
-                                struct SCSICmd *cmd)
+                                struct SCSICmd *cmd, ULONG alloc)
 {
-    UBYTE *buf = (UBYTE *)cmd->scsi_Data;
-    UWORD page_len = 3;
+    UBYTE page[7];
     (void)unit;
 
-    if (!buf)
+    if (cmd->scsi_Data == NULL)
         return IOERR_BADADDRESS;
-    if (cmd->scsi_Length < (ULONG)(4 + page_len))
-        page_len = (UWORD)(cmd->scsi_Length > 4 ? cmd->scsi_Length - 4 : 0);
 
-    buf[0] = 0;    /* peripheral type = direct access block */
-    buf[1] = 0x00; /* page code */
-    buf[2] = 0;    /* page length MSB */
-    buf[3] = (UBYTE)page_len;
+    page[0] = 0;    /* peripheral type = direct access block */
+    page[1] = 0x00; /* page code */
+    page[2] = 0;    /* page length MSB */
+    page[3] = 3;    /* page length LSB — pages we actually implement */
 
     /* Supported page list — order matters: ascending. */
-    if (page_len > 0)
-        buf[4] = 0x00;
-    if (page_len > 1)
-        buf[5] = 0xB0;
-    if (page_len > 2)
-        buf[6] = 0xB2;
+    page[4] = 0x00;
+    page[5] = 0xB0;
+    page[6] = 0xB2;
 
-    scsi_set_actual(cmd, (ULONG)(4 + page_len));
+    scsi_emit(cmd, page, sizeof(page), alloc);
     return 0;
 }
 
@@ -362,18 +393,14 @@ static BYTE scsi_inquiry_vpd_00(struct NVMeUnit *unit,
  * 64 bytes total response length (page length field = 60).
  */
 static BYTE scsi_inquiry_vpd_b0(struct NVMeUnit *unit,
-                                struct SCSICmd *cmd)
+                                struct SCSICmd *cmd, ULONG alloc)
 {
-    UBYTE *buf = (UBYTE *)cmd->scsi_Data;
     struct NVMeController *ctrl = unit ? unit->ctrl : NULL;
     ULONG max_xfer_blocks;
-    ULONG copy_len;
 
-    if (!buf || !ctrl)
+    if (cmd->scsi_Data == NULL || !ctrl)
         return IOERR_BADADDRESS;
 
-    /* Build the response in a small stack buffer so we don't have to
-     * worry about scsi_Length truncation mid-write. */
     UBYTE page[64];
     memset(page, 0, sizeof(page));
 
@@ -402,11 +429,7 @@ static BYTE scsi_inquiry_vpd_b0(struct NVMeUnit *unit,
     /* Everything else (optimal transfer length, write-same, etc.) we
      * leave at 0 — meaning "no preference / not supported". */
 
-    copy_len = sizeof(page);
-    if (cmd->scsi_Length < copy_len)
-        copy_len = cmd->scsi_Length;
-    CopyMem(page, cmd->scsi_Data, copy_len);
-    scsi_set_actual(cmd, sizeof(page));
+    scsi_emit(cmd, page, sizeof(page), alloc);
     return 0;
 }
 
@@ -420,13 +443,11 @@ static BYTE scsi_inquiry_vpd_b0(struct NVMeUnit *unit,
  * directly; we just want the client to issue UNMAPs.
  */
 static BYTE scsi_inquiry_vpd_b2(struct NVMeUnit *unit,
-                                struct SCSICmd *cmd)
+                                struct SCSICmd *cmd, ULONG alloc)
 {
-    UBYTE *buf = (UBYTE *)cmd->scsi_Data;
     UBYTE page[8];
-    ULONG copy_len;
 
-    if (!buf)
+    if (cmd->scsi_Data == NULL)
         return IOERR_BADADDRESS;
 
     memset(page, 0, sizeof(page));
@@ -445,11 +466,7 @@ static BYTE scsi_inquiry_vpd_b2(struct NVMeUnit *unit,
     page[6] = 0x02; /* Provisioning Type: thinly provisioned */
     page[7] = 0;
 
-    copy_len = sizeof(page);
-    if (cmd->scsi_Length < copy_len)
-        copy_len = cmd->scsi_Length;
-    CopyMem(page, cmd->scsi_Data, copy_len);
-    scsi_set_actual(cmd, sizeof(page));
+    scsi_emit(cmd, page, sizeof(page), alloc);
     return 0;
 }
 
@@ -471,20 +488,25 @@ static BYTE scsi_inquiry(struct NVMeUnit *unit, struct SCSICmd *cmd)
     evpd = (UBYTE)(command[1] & 0x01);
     page_code = command[2];
 
+    /* ALLOCATION LENGTH (CDB bytes 3-4) caps every INQUIRY response —
+     * asking for the SCSI-2 standard 36 bytes must not get you our
+     * 44-byte extended form. */
+    ULONG alloc = scsi_load_be16(&command[3]);
+
     /* Without EVPD, page_code must be zero per SPC-4 — otherwise it's
      * an illegal request.  We ignore that subtlety and just serve the
      * standard data. */
     if (!evpd)
-        return scsi_inquiry_standard(unit, cmd);
+        return scsi_inquiry_standard(unit, cmd, alloc);
 
     switch (page_code)
     {
     case 0x00:
-        return scsi_inquiry_vpd_00(unit, cmd);
+        return scsi_inquiry_vpd_00(unit, cmd, alloc);
     case 0xB0:
-        return scsi_inquiry_vpd_b0(unit, cmd);
+        return scsi_inquiry_vpd_b0(unit, cmd, alloc);
     case 0xB2:
-        return scsi_inquiry_vpd_b2(unit, cmd);
+        return scsi_inquiry_vpd_b2(unit, cmd, alloc);
     default:
         Kprintf("[nvme] %s: unsupported VPD page 0x%02lx\n",
                 __func__, (ULONG)page_code);
@@ -501,22 +523,24 @@ static BYTE scsi_inquiry(struct NVMeUnit *unit, struct SCSICmd *cmd)
  */
 static BYTE scsi_read_capacity_10(struct NVMeUnit *unit, struct SCSICmd *cmd)
 {
-    struct SCSI_CAPACITY_10 *data = (struct SCSI_CAPACITY_10 *)cmd->scsi_Data;
-
-    if (data == NULL)
+    if (cmd->scsi_Data == NULL)
     {
         scsi_make_sense(cmd, 0, 0, IOERR_BADADDRESS);
         return IOERR_BADADDRESS;
     }
 
-    data->block_size = unit->blockSize ? unit->blockSize : 512;
+    struct SCSI_CAPACITY_10 data;
+
+    data.block_size = unit->blockSize ? unit->blockSize : 512;
 
     if (unit->logicalSectors < (uint64_t)0xFFFFFFFFUL)
-        data->lba = (ULONG)(unit->logicalSectors - 1);
+        data.lba = (ULONG)(unit->logicalSectors - 1);
     else
-        data->lba = 0xFFFFFFFFUL;
+        data.lba = 0xFFFFFFFFUL;
 
-    cmd->scsi_Actual = sizeof(struct SCSI_CAPACITY_10);
+    /* READ CAPACITY (10) has no ALLOCATION LENGTH field — the response
+     * is a fixed 8 bytes, so that is its own cap. */
+    scsi_emit(cmd, &data, sizeof(data), sizeof(data));
     return 0;
 }
 
@@ -525,48 +549,68 @@ static BYTE scsi_read_capacity_10(struct NVMeUnit *unit, struct SCSICmd *cmd)
  */
 static BYTE scsi_read_capacity_16(struct NVMeUnit *unit, struct SCSICmd *cmd)
 {
-    struct SCSI_CAPACITY_16 *data = (struct SCSI_CAPACITY_16 *)cmd->scsi_Data;
+    UBYTE *command = (UBYTE *)cmd->scsi_Command;
 
-    if (data == NULL)
+    if (cmd->scsi_Data == NULL)
     {
         scsi_make_sense(cmd, 0, 0, IOERR_BADADDRESS);
         return IOERR_BADADDRESS;
     }
+    if (cmd->scsi_CmdLength < 16 || command == NULL)
+        return IOERR_BADLENGTH;
 
-    data->block_size = unit->blockSize ? unit->blockSize : 512;
-    data->lba = unit->logicalSectors ? unit->logicalSectors - 1 : 0;
+    struct SCSI_CAPACITY_16 data;
 
-    cmd->scsi_Actual = sizeof(struct SCSI_CAPACITY_16);
+    memset(&data, 0, sizeof(data));
+    data.block_size = unit->blockSize ? unit->blockSize : 512;
+    data.lba = unit->logicalSectors ? unit->logicalSectors - 1 : 0;
+
+    /* ALLOCATION LENGTH is CDB bytes 10-13. */
+    scsi_emit(cmd, &data, sizeof(data), scsi_load_be32(&command[10]));
     return 0;
 }
+
+/* Both mode pages we emulate are 24 bytes on the wire: a 2-byte header
+ * (page code + page length) plus 22 bytes of parameters, which is what
+ * their page-length field of 0x16 declares. */
+#define SCSI_MODE_PAGE_LEN 0x16
+#define SCSI_MODE_PAGE_SIZE (2 + SCSI_MODE_PAGE_LEN)
+
+/* Worst case is MODE SENSE (10)'s 8-byte header carrying both pages. */
+#define SCSI_MODE_SENSE_MAX (8 + 2 * SCSI_MODE_PAGE_SIZE)
 
 /*
  * scsi_write_mode_pages - write mode page data into buf starting at idx.
  *
- * Shared by MODE SENSE 6 and MODE SENSE 10.  Returns updated idx.
+ * Shared by MODE SENSE 6 and MODE SENSE 10.  Returns updated idx.  @data
+ * must have room for SCSI_MODE_SENSE_MAX bytes.
  */
 static UBYTE scsi_write_mode_pages(UBYTE *data, UBYTE page, UBYTE idx, ULONG blockSize)
 {
     if (page == 0x3F || page == 0x03)
     {
+        UBYTE start = idx;
+
         data[idx++] = 0x03; /* page code: Format Device Parameters */
-        data[idx++] = 0x16; /* page length */
+        data[idx++] = SCSI_MODE_PAGE_LEN;
         for (int i = 0; i < 8; i++)
             data[idx++] = 0;
         data[idx++] = 0; /* sectors per track (unknown for NVMe) */
         data[idx++] = 0;
-        data[idx++] = (UBYTE)(blockSize >> 8);
+        data[idx++] = (UBYTE)(blockSize >> 8); /* data bytes per sector */
         data[idx++] = (UBYTE)(blockSize);
-        for (int i = 0; i < 10; i++)
+        while (idx < start + SCSI_MODE_PAGE_SIZE)
             data[idx++] = 0;
     }
 
     if (page == 0x3F || page == 0x04)
     {
+        UBYTE start = idx;
+
         data[idx++] = 0x04; /* page code: Rigid Drive Geometry Parameters */
-        data[idx++] = 0x16; /* page length */
-        for (int i = 0; i < 24; i++)
-            data[idx++] = 0;
+        data[idx++] = SCSI_MODE_PAGE_LEN;
+        while (idx < start + SCSI_MODE_PAGE_SIZE)
+            data[idx++] = 0; /* no CHS geometry to report for NVMe */
     }
 
     return idx;
@@ -579,11 +623,12 @@ static UBYTE scsi_write_mode_pages(UBYTE *data, UBYTE page, UBYTE idx, ULONG blo
  */
 static BYTE scsi_mode_sense(struct NVMeUnit *unit, struct SCSICmd *cmd)
 {
-    UBYTE *data = (UBYTE *)cmd->scsi_Data;
     UBYTE *command = (UBYTE *)cmd->scsi_Command;
 
-    if (data == NULL)
+    if (cmd->scsi_Data == NULL)
         return IOERR_BADADDRESS;
+    if (cmd->scsi_CmdLength < 6 || command == NULL)
+        return IOERR_BADLENGTH;
 
     UBYTE page = command[2] & 0x3F;
     UBYTE subpage = command[3];
@@ -594,11 +639,8 @@ static BYTE scsi_mode_sense(struct NVMeUnit *unit, struct SCSICmd *cmd)
         return IOERR_NOCMD;
     }
 
-    ULONG min_len = (page == 0x3F) ? 52UL : 28UL;
-    if ((ULONG)cmd->scsi_Length < min_len)
-        return IOERR_BADLENGTH;
-
     ULONG blockSize = unit->blockSize ? unit->blockSize : 512;
+    UBYTE data[SCSI_MODE_SENSE_MAX];
 
     data[0] = 3; /* mode data length placeholder */
     data[1] = 0; /* medium type: disk */
@@ -608,7 +650,7 @@ static BYTE scsi_mode_sense(struct NVMeUnit *unit, struct SCSICmd *cmd)
     UBYTE idx = scsi_write_mode_pages(data, page, 4, blockSize);
 
     data[0] = (UBYTE)(idx - 1);
-    cmd->scsi_Actual = idx;
+    scsi_emit(cmd, data, idx, command[4]); /* ALLOCATION LENGTH = CDB byte 4 */
     return 0;
 }
 
@@ -620,11 +662,12 @@ static BYTE scsi_mode_sense(struct NVMeUnit *unit, struct SCSICmd *cmd)
  */
 static BYTE scsi_mode_sense_10(struct NVMeUnit *unit, struct SCSICmd *cmd)
 {
-    UBYTE *data = (UBYTE *)cmd->scsi_Data;
     UBYTE *command = (UBYTE *)cmd->scsi_Command;
 
-    if (data == NULL)
+    if (cmd->scsi_Data == NULL)
         return IOERR_BADADDRESS;
+    if (cmd->scsi_CmdLength < 10 || command == NULL)
+        return IOERR_BADLENGTH;
 
     UBYTE page = command[2] & 0x3F;
     UBYTE subpage = command[3];
@@ -635,13 +678,10 @@ static BYTE scsi_mode_sense_10(struct NVMeUnit *unit, struct SCSICmd *cmd)
         return IOERR_NOCMD;
     }
 
-    /* 8-byte header + same page data as MODE SENSE 6 */
-    ULONG min_len = (page == 0x3F) ? 56UL : 32UL;
-    if ((ULONG)cmd->scsi_Length < min_len)
-        return IOERR_BADLENGTH;
-
     ULONG blockSize = unit->blockSize ? unit->blockSize : 512;
+    UBYTE data[SCSI_MODE_SENSE_MAX];
 
+    /* 8-byte header + same page data as MODE SENSE 6 */
     data[0] = 0; /* mode data length high byte (filled in below) */
     data[1] = 0; /* mode data length low byte */
     data[2] = 0; /* medium type: disk */
@@ -654,10 +694,10 @@ static BYTE scsi_mode_sense_10(struct NVMeUnit *unit, struct SCSICmd *cmd)
     UBYTE idx = scsi_write_mode_pages(data, page, 8, blockSize);
 
     /* mode data length = total bytes - 2 (excludes the length field itself) */
-    UWORD len = (UWORD)(idx - 2);
-    data[0] = (UBYTE)(len >> 8);
-    data[1] = (UBYTE)(len);
-    cmd->scsi_Actual = idx;
+    scsi_store_be16(&data[0], (UWORD)(idx - 2));
+
+    /* ALLOCATION LENGTH is CDB bytes 7-8. */
+    scsi_emit(cmd, data, idx, scsi_load_be16(&command[7]));
     return 0;
 }
 
@@ -670,28 +710,28 @@ static BYTE scsi_mode_sense_10(struct NVMeUnit *unit, struct SCSICmd *cmd)
 static BYTE scsi_request_sense(struct NVMeUnit *unit, struct SCSICmd *cmd)
 {
     (void)unit;
-    struct SCSI_FIXED_SENSE *sense = (struct SCSI_FIXED_SENSE *)cmd->scsi_Data;
     UBYTE *command = (UBYTE *)cmd->scsi_Command;
 
-    if (sense == NULL)
+    if (cmd->scsi_Data == NULL)
         return IOERR_BADADDRESS;
+    if (cmd->scsi_CmdLength < 6 || command == NULL)
+        return IOERR_BADLENGTH;
 
-    UBYTE alloc = command[4];
+    struct SCSI_FIXED_SENSE sense;
 
-    sense->response = 0x70; /* fixed format, current */
-    sense->pad = 0;
-    sense->senseKey = 0x00; /* no sense */
-    sense->info = 0;
-    sense->additional = (UBYTE)(sizeof(struct SCSI_FIXED_SENSE) - 7);
-    sense->specific = 0;
-    sense->asc = 0x00;
-    sense->asq = 0x00;
-    sense->fru = 0;
-    sense->sks[0] = sense->sks[1] = sense->sks[2] = 0;
+    sense.response = 0x70; /* fixed format, current */
+    sense.pad = 0;
+    sense.senseKey = 0x00; /* no sense */
+    sense.info = 0;
+    sense.additional = (UBYTE)(sizeof(sense) - 7);
+    sense.specific = 0;
+    sense.asc = 0x00;
+    sense.asq = 0x00;
+    sense.fru = 0;
+    sense.sks[0] = sense.sks[1] = sense.sks[2] = 0;
 
-    cmd->scsi_Actual = (alloc < (UBYTE)sizeof(struct SCSI_FIXED_SENSE))
-                           ? alloc
-                           : (UBYTE)sizeof(struct SCSI_FIXED_SENSE);
+    /* ALLOCATION LENGTH is CDB byte 4. */
+    scsi_emit(cmd, &sense, sizeof(sense), command[4]);
     return 0;
 }
 
@@ -881,6 +921,13 @@ BYTE handle_scsi_cmd(struct IOStdReq *io)
     BYTE error = 0;
     cmd->scsi_SenseActual = 0;
 
+    if (command == NULL)
+        return IOERR_BADADDRESS;
+    /* Every opcode we support has at least a 6-byte CDB; per-handler
+     * checks cover the longer groups before they read their own fields. */
+    if (cmd->scsi_CmdLength < 6)
+        return IOERR_BADLENGTH;
+
     uint64_t lba;
     ULONG count;
 
@@ -957,6 +1004,22 @@ BYTE handle_scsi_cmd(struct IOStdReq *io)
         /* fall through to do_scsi_transfer */
 
     do_scsi_transfer:
+        /* The CDB block count and scsi_Length are independent inputs;
+         * nvme_io_submit_rw() only ever sees the former, so reconcile
+         * them here or a short buffer becomes a DMA overrun.  Compare in
+         * blocks — count << blockShift can wrap for a 32-bit CDB count.
+         * Refuse rather than truncate: a short READ would hand back
+         * partial data as success, a short WRITE would push whatever
+         * followed the buffer onto the medium. */
+        if ((ULONG)(cmd->scsi_Length >> unit->blockShift) < count)
+        {
+            Kprintf("[nvme] %s: buffer too small for CDB (%lu blocks vs %lu bytes)\n",
+                    __func__, count, (ULONG)cmd->scsi_Length);
+            error = IOERR_BADLENGTH;
+            scsi_make_sense(cmd, (ULONG)lba, count, error);
+            break;
+        }
+
         error = nvme_io_submit_rw(unit, io, lba, count,
                                   (cmd->scsi_Flags & SCSIF_READ) ? nvme_cmd_read : nvme_cmd_write,
                                   cmd->scsi_Data);

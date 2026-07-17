@@ -27,15 +27,6 @@ struct NVMeController;
 /* Internal command: posted by AbortIO to the unit task */
 #define CMD_INTERNAL_ABORT_REQUEST (CMD_NONSTD + 0x100)
 
-/* TD64 trackdisk 64-bit commands — defined in NDK 3.2's <devices/trackdisk.h>
- * but absent from older NDKs; define them when the toolchain header doesn't. */
-#ifndef TD_READ64
-#define TD_READ64 (CMD_NONSTD + 15)
-#define TD_WRITE64 (CMD_NONSTD + 16)
-#define TD_SEEK64 (CMD_NONSTD + 17)
-#define TD_FORMAT64 (CMD_NONSTD + 18)
-#endif
-
 /* New Style Device Enhanced-Trackdisk 64-bit commands (not in the NDK) */
 #define NSCMD_ETD_READ64 0xE000
 #define NSCMD_ETD_WRITE64 0xE001
