@@ -241,7 +241,7 @@ static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase)
     Kprintf("[nvme] %s: mounted %ld partition(s) on %lu unit(s)\n", __func__, mounted, count);
     /* MountDrive overwrote the list entries with per-unit results */
     for (ULONG i = 0; i < count; i++)
-        KprintfH("[nvme] %s: unit %lu: %ld\n", __func__, i, (LONG)unitList[i + 1]);
+        KprintfT("[nvme] %s: unit %lu: %ld\n", __func__, i, (LONG)unitList[i + 1]);
 
     FreeMem(unitList, (count + 1) * sizeof(ULONG));
 }
@@ -289,7 +289,7 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
 static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
                     ULONG flags asm("d1"), struct NVMeDevice *base asm("a6"))
 {
-    KprintfH("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
+    KprintfT("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
 
     /* Probe once: enumerate all NVMe controllers and build the unit list */
     if (devEnsureProbed(base) != ERR_NO_ERROR)
@@ -326,13 +326,13 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
         io->io_Error = IOERR_OPENFAIL;
         return;
     }
-    KprintfH("[nvme] %s: found unit %ld, opening\n", __func__, unitNumber);
+    KprintfT("[nvme] %s: found unit %ld, opening\n", __func__, unitNumber);
 
     s32 result = UnitOpen(unit, unitNumber, (LONG)flags);
 
     if (result == ERR_NO_ERROR)
     {
-        KprintfH("[nvme] %s: unit %ld opened (openCnt=%lu)\n", __func__, unitNumber, (ULONG)unit->unit.unit_OpenCnt);
+        KprintfT("[nvme] %s: unit %ld opened (openCnt=%lu)\n", __func__, unitNumber, (ULONG)unit->unit.unit_OpenCnt);
         io->io_Unit = (struct Unit *)unit;
         base->device.dd_Library.lib_OpenCnt++;
         base->device.dd_Library.lib_Flags &= (UBYTE)~LIBF_DELEXP;
@@ -357,7 +357,7 @@ static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
      * then the code must stay resident. */
     if (!reset_guard_remove(&base->resetGuard))
     {
-        KprintfH("[nvme] %s: reset guard not removable, staying resident\n", __func__);
+        KprintfT("[nvme] %s: reset guard not removable, staying resident\n", __func__);
         return 0;
     }
 
@@ -382,7 +382,7 @@ static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
 static ULONG closeLib(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6"))
 {
     struct NVMeUnit *unit = (struct NVMeUnit *)io->io_Unit;
-    KprintfH("[nvme] %s: closing unit %ld\n", __func__, unit->unitNumber);
+    KprintfT("[nvme] %s: closing unit %ld\n", __func__, unit->unitNumber);
 
     /* UnitClose handles hardware teardown on last close; the NVMeUnit
      * struct itself is NOT freed — it lives until expungeLib. */

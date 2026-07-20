@@ -2,7 +2,7 @@ cmake_minimum_required(VERSION 3.14.0)
 project(nvme.device VERSION ${CMAKE_PROJECT_VERSION})
 
 # Debug-output backend defines (EMU68_DEBUG_BACKEND, see emu68-common).
-emu68_debug_backend_definitions()
+emu68_debug_definitions()
 
 # cache_ops.h LVO-fallback define (EMU68_FORCE_LVO_CACHE_OPS, see emu68-common).
 emu68_cache_ops_definitions()
@@ -75,9 +75,16 @@ target_include_directories(nvme.device
 )
 
 # Route the mounter submodule's diagnostics into the debug backend; device.c
-# provides the mounter_log sink.  Both compile away when the backend is off.
-if(NOT EMU68_DEBUG_BACKEND STREQUAL "off")
+# provides the mounter_log sink.  The submodule keeps its own switch names, so
+# map them onto our tiers: its printf() carries mount errors (debug tier), its
+# dbg() is per-step tracing (trace tier).  Both compile away below those.
+emu68_tier_at_least(_mounter_log debug)
+if(_mounter_log)
     target_compile_definitions(nvme.device PRIVATE MOUNTER_LOG)
+endif()
+emu68_tier_at_least(_mounter_trace trace)
+if(_mounter_trace)
+    target_compile_definitions(nvme.device PRIVATE MOUNTER_TRACE=1)
 endif()
 
 # Third-party submodule; not -Wconversion-clean under this project's strict

@@ -178,7 +178,7 @@ static void nvme_stage_admin_prps(struct nvme_request *req,
 int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
                          union nvme_result *result, void *buffer, u32 buflen)
 {
-    KprintfH("[nvme] submit_sync_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu result=%lx\n",
+    KprintfT("[nvme] submit_sync_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu result=%lx\n",
              (ULONG)ctrl, (ULONG)cmd->common.opcode,
              nvme_get_admin_opcode_str(cmd->common.opcode),
              (ULONG)buffer, (ULONG)buflen, (ULONG)result);
@@ -260,7 +260,7 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
                           void (*done)(struct nvme_request *req), void *priv,
                           unsigned int req_flags)
 {
-    KprintfH("[nvme] submit_async_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu done=%lx priv=%lx flags=0x%lx\n",
+    KprintfT("[nvme] submit_async_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu done=%lx priv=%lx flags=0x%lx\n",
              (ULONG)ctrl, (ULONG)cmd->common.opcode,
              nvme_get_admin_opcode_str(cmd->common.opcode),
              (ULONG)buffer, (ULONG)buflen, (ULONG)done, (ULONG)priv,
@@ -311,7 +311,7 @@ int nvme_submit_async_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
  */
 static void abort_done(struct nvme_request *req)
 {
-    KprintfH("[nvme] abort_done: sqid=%lu cid=%lu status=0x%lx (%s)\n",
+    KprintfT("[nvme] abort_done: sqid=%lu cid=%lu status=0x%lx (%s)\n",
              (ULONG)le16(req->cmd.abort.sqid),
              (ULONG)le16(req->cmd.abort.cid),
              (ULONG)req->status, nvme_get_error_status_str(req->status));
@@ -344,7 +344,7 @@ static int nvme_submit_abort_sqe(struct NVMeController *ctrl, u16 sqid, u16 cid)
                 (ULONG)sqid, (ULONG)cid, (LONG)ret);
         return ret;
     }
-    KprintfH("[nvme] submit_abort_sqe: sqid=%lu cid=%lu submitted\n",
+    KprintfT("[nvme] submit_abort_sqe: sqid=%lu cid=%lu submitted\n",
              (ULONG)sqid, (ULONG)cid);
     return 0;
 }

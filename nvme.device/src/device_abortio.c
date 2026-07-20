@@ -47,7 +47,7 @@ static inline LONG post_abort_request(struct NVMeUnit *unit, struct IOStdReq *io
  */
 LONG abortIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __attribute__((unused)))
 {
-    KprintfH("[nvme] %s: abort request %lx\n", __func__, (ULONG)io);
+    KprintfT("[nvme] %s: abort request %lx\n", __func__, (ULONG)io);
     if (!io)
         return -1;
 

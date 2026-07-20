@@ -47,7 +47,7 @@
 
 static BOOL nvme_pci_is_supported(struct Library *pcielibBase, struct pci_dev *pd)
 {
-    KprintfH("[nvme] pci_is_supported: pd=%lx vendor=%04lx device=%04lx\n",
+    KprintfT("[nvme] pci_is_supported: pd=%lx vendor=%04lx device=%04lx\n",
              (ULONG)pd, (ULONG)pd->vendor, (ULONG)pd->device);
     if (pd->vendor == 0xFFFFU && pd->device == 0xFFFFU)
     {
@@ -64,7 +64,7 @@ static s32 hw_init(struct NVMeController *ctrl)
     struct Library *pcielibBase = ctrl->device->pcieBase;
     struct pci_dev *pd = ctrl->pci_dev;
 
-    KprintfH("[nvme] hw_init: ctrl=%lx pd=%lx\n", (ULONG)ctrl, (ULONG)pd);
+    KprintfT("[nvme] hw_init: ctrl=%lx pd=%lx\n", (ULONG)ctrl, (ULONG)pd);
 
     if (!nvme_pci_is_supported(pcielibBase, pd))
         return ERR_CONTROLLER_ERROR;
@@ -83,14 +83,14 @@ static s32 hw_init(struct NVMeController *ctrl)
 
     pci_set_master(pd);
     ctrl->bar0 = (volatile void *)(ULONG)pd->base_address[0];
-    KprintfH("[nvme] %s: BAR0=%lx\n", __func__, (ULONG)ctrl->bar0);
+    KprintfT("[nvme] %s: BAR0=%lx\n", __func__, (ULONG)ctrl->bar0);
     return ERR_NO_ERROR;
 }
 
 static void hw_shutdown(struct NVMeController *ctrl)
 {
     struct Library *pcielibBase = ctrl->device->pcieBase;
-    KprintfH("[nvme] hw_shutdown: ctrl=%lx pd=%lx\n",
+    KprintfT("[nvme] hw_shutdown: ctrl=%lx pd=%lx\n",
              (ULONG)ctrl, (ULONG)ctrl->pci_dev);
     if (pcielibBase && ctrl->pci_dev)
         SetBoardAttrs(ctrl->pci_dev, PRM_BoardOwner, 0UL, TAG_DONE);
@@ -126,7 +126,7 @@ static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
     u32 deadline_us = start_us + timeout * 1000000U;
     int polls = 0;
 
-    KprintfH("[nvme] wait_ready(%s): mask=%08lx val=%08lx timeout=%lu s\n",
+    KprintfT("[nvme] wait_ready(%s): mask=%08lx val=%08lx timeout=%lu s\n",
              op, (ULONG)mask, (ULONG)val, (ULONG)timeout);
 
     for (;;)
@@ -140,7 +140,7 @@ static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
         }
         if ((csts & mask) == val)
         {
-            KprintfH("[nvme] wait_ready(%s): OK CSTS=%08lx after %ld polls / %lu ms\n",
+            KprintfT("[nvme] wait_ready(%s): OK CSTS=%08lx after %ld polls / %lu ms\n",
                      op, (ULONG)csts, (LONG)polls,
                      (ULONG)((get_time() - start_us) / 1000U));
             return 0;
@@ -230,7 +230,7 @@ static int nvme_init_ctrl_finish(struct NVMeController *ctrl, BOOL was_suspended
 static int nvme_enable_ctrl(struct NVMeController *ctrl)
 {
     ctrl->cap = nvme_reg_read64(ctrl, NVME_REG_CAP);
-    KprintfH("[nvme] enable_ctrl: CAP=%08lx%08lx\n", (u32)(ctrl->cap >> 32), (u32)ctrl->cap);
+    KprintfT("[nvme] enable_ctrl: CAP=%08lx%08lx\n", (u32)(ctrl->cap >> 32), (u32)ctrl->cap);
     unsigned dev_page_min = NVME_CAP_MPSMIN(ctrl->cap) + 12;
 
     if (NVME_CTRL_PAGE_SHIFT < dev_page_min)
@@ -281,9 +281,9 @@ static int nvme_enable_ctrl(struct NVMeController *ctrl)
     }
 
     ctrl->ctrl_config |= NVME_CC_ENABLE;
-    KprintfH("[nvme] enable_ctrl: writing final CC=%08lx (with CC.EN)\n", ctrl->ctrl_config);
+    KprintfT("[nvme] enable_ctrl: writing final CC=%08lx (with CC.EN)\n", ctrl->ctrl_config);
     nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
-    KprintfH("[nvme] enable_ctrl: now waiting for CSTS.RDY=1, timeout=%lu s\n", (ULONG)((timeout + 1) / 2));
+    KprintfT("[nvme] enable_ctrl: now waiting for CSTS.RDY=1, timeout=%lu s\n", (ULONG)((timeout + 1) / 2));
     return nvme_wait_ready(ctrl, NVME_CSTS_RDY, NVME_CSTS_RDY,
                            (timeout + 1) / 2, "initialisation");
 }
@@ -302,10 +302,10 @@ static int nvme_enable_ctrl(struct NVMeController *ctrl)
  */
 static int nvme_disable_ctrl(struct NVMeController *ctrl, BOOL shutdown)
 {
-#ifdef DEBUG_HIGH
+#ifdef TRACE
     u32 csts_before = nvme_reg_read32(ctrl, NVME_REG_CSTS);
 
-    KprintfH("[nvme] disable_ctrl(shutdown=%ld): CSTS_before=%08lx CC_before=%08lx\n",
+    KprintfT("[nvme] disable_ctrl(shutdown=%ld): CSTS_before=%08lx CC_before=%08lx\n",
              (LONG)shutdown, csts_before, ctrl->ctrl_config);
 #endif
 
@@ -315,7 +315,7 @@ static int nvme_disable_ctrl(struct NVMeController *ctrl, BOOL shutdown)
     else
         ctrl->ctrl_config &= ~(u32)NVME_CC_ENABLE;
 
-    KprintfH("[nvme] disable_ctrl: writing CC=%08lx\n", ctrl->ctrl_config);
+    KprintfT("[nvme] disable_ctrl: writing CC=%08lx\n", ctrl->ctrl_config);
     nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
 
     if (shutdown)
@@ -370,7 +370,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
 {
     s32 ret;
 
-    KprintfH("[nvme] probe_controller: ctrl=%lx pci_dev=%lx\n", (ULONG)ctrl, (ULONG)ctrl->pci_dev);
+    KprintfT("[nvme] probe_controller: ctrl=%lx pci_dev=%lx\n", (ULONG)ctrl, (ULONG)ctrl->pci_dev);
 
     ret = hw_init(ctrl);
     if (ret != ERR_NO_ERROR)
@@ -445,14 +445,14 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         goto fail_admin_task;
     }
 
-    KprintfH("[nvme] %s: calling nvme_disable_ctrl (CC.EN=0, wait RDY=0)\n", __func__);
+    KprintfT("[nvme] %s: calling nvme_disable_ctrl (CC.EN=0, wait RDY=0)\n", __func__);
     if (nvme_disable_ctrl(ctrl, FALSE) != 0)
     {
         Kprintf("[nvme] %s: nvme_disable_ctrl failed\n", __func__);
         ret = ERR_CONTROLLER_ERROR;
         goto fail_int;
     }
-    KprintfH("[nvme] %s: nvme_disable_ctrl OK\n", __func__);
+    KprintfT("[nvme] %s: nvme_disable_ctrl OK\n", __func__);
 
     if (nvme_setup_admin_queue(ctrl) != 0)
     {
@@ -460,16 +460,16 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         ret = ERR_CONTROLLER_ERROR;
         goto fail_int;
     }
-    KprintfH("[nvme] %s: nvme_setup_admin_queue OK\n", __func__);
+    KprintfT("[nvme] %s: nvme_setup_admin_queue OK\n", __func__);
 
-    KprintfH("[nvme] %s: calling nvme_enable_ctrl (CC.EN=1, wait RDY=1)\n", __func__);
+    KprintfT("[nvme] %s: calling nvme_enable_ctrl (CC.EN=1, wait RDY=1)\n", __func__);
     if (nvme_enable_ctrl(ctrl) != 0)
     {
         Kprintf("[nvme] %s: nvme_enable_ctrl failed\n", __func__);
         ret = ERR_CONTROLLER_ERROR;
         goto fail_admin;
     }
-    KprintfH("[nvme] %s: nvme_enable_ctrl OK, controller LIVE-ready\n", __func__);
+    KprintfT("[nvme] %s: nvme_enable_ctrl OK, controller LIVE-ready\n", __func__);
 
     if (nvme_setup_io_queue(ctrl) != 0)
     {
@@ -477,7 +477,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         ret = ERR_CONTROLLER_ERROR;
         goto fail_enable;
     }
-    KprintfH("[nvme] %s: nvme_setup_io_queue OK\n", __func__);
+    KprintfT("[nvme] %s: nvme_setup_io_queue OK\n", __func__);
 
     nvme_change_ctrl_state(ctrl, NVME_CTRL_CONNECTING);
 
@@ -493,7 +493,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         ret = ERR_CONTROLLER_ERROR;
         goto fail_enable;
     }
-    KprintfH("[nvme] %s: nvme_init_ctrl_finish OK\n", __func__);
+    KprintfT("[nvme] %s: nvme_init_ctrl_finish OK\n", __func__);
 
     /* If the controller advertises HMB (DRAM-less or otherwise wants
      * host RAM for FTL caching), allocate and enable it now — before
@@ -507,14 +507,14 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
      * miss namespace-change events the scan might trigger. */
     nvme_start_ctrl(ctrl);
 
-    KprintfH("[nvme] %s: starting namespace scan\n", __func__);
+    KprintfT("[nvme] %s: starting namespace scan\n", __func__);
     /* Identify Controller + per-NSID Identify; each found NSID calls
      * nvme_alloc_nvmeunit which adds a NVMeUnit to base->units.
      * Sync call: probe runs on a foreign task, and units must be
      * visible in base->units before nvme_probe_all returns so
      * subsequent openLib calls can find them. */
     nvme_scan_namespaces(ctrl);
-    KprintfH("[nvme] %s: namespace scan complete\n", __func__);
+    KprintfT("[nvme] %s: namespace scan complete\n", __func__);
 
     Kprintf("[nvme] %s: controller %lx fully brought up\n",
             __func__, (ULONG)ctrl->pci_dev);
@@ -623,7 +623,7 @@ s32 nvme_probe_all(struct NVMeDevice *base)
     struct pci_dev *pd = NULL;
     int nctrls = 0;
 
-    KprintfH("[nvme] probe_all: base=%lx\n", (ULONG)base);
+    KprintfT("[nvme] probe_all: base=%lx\n", (ULONG)base);
 
     base->nextUnitNumber = 0;
 
@@ -726,7 +726,7 @@ static void nvme_ctrl_shutdown(struct NVMeController *ctrl)
  */
 void nvme_unprobe_all(struct NVMeDevice *base)
 {
-    KprintfH("[nvme] unprobe_all: base=%lx\n", (ULONG)base);
+    KprintfT("[nvme] unprobe_all: base=%lx\n", (ULONG)base);
 
     struct MinNode *node, *next;
     node = base->controllers.mlh_Head;
@@ -735,7 +735,7 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         struct NVMeController *ctrl = (struct NVMeController *)node;
         node = next;
 
-        KprintfH("[nvme] %s: tearing down ctrl %lx\n", __func__,
+        KprintfT("[nvme] %s: tearing down ctrl %lx\n", __func__,
                  (ULONG)ctrl->pci_dev);
 
         nvme_ctrl_shutdown(ctrl);
@@ -813,12 +813,12 @@ void nvme_unprobe_all(struct NVMeDevice *base)
  */
 void nvme_reset_controller(struct NVMeController *ctrl)
 {
-    KprintfH("[nvme] reset_controller: ctrl=%lx\n", (ULONG)ctrl);
+    KprintfT("[nvme] reset_controller: ctrl=%lx\n", (ULONG)ctrl);
 
     if (!ctrl || !ctrl->bar0)
         return;
 
-    KprintfH("[nvme] reset: starting\n");
+    KprintfT("[nvme] reset: starting\n");
 
     if (!nvme_change_ctrl_state(ctrl, NVME_CTRL_RESETTING))
     {
@@ -894,5 +894,5 @@ void nvme_reset_finish(struct NVMeController *ctrl, BOOL ok)
     nvme_start_ctrl(ctrl);
     nvme_queue_scan(ctrl);
 
-    KprintfH("[nvme] reset: complete, controller LIVE\n");
+    KprintfT("[nvme] reset: complete, controller LIVE\n");
 }

@@ -85,7 +85,7 @@ static BOOL nvme_handle_aen_notice(struct NVMeController *ctrl, u32 result)
 		ctrl->aen_result = result;
 		break;
 	default:
-		KprintfH("[nvme] %s: async event result %08lx\n", __func__, (ULONG)result);
+		KprintfT("[nvme] %s: async event result %08lx\n", __func__, (ULONG)result);
 	}
 	return requeue;
 }

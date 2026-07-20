@@ -770,7 +770,7 @@ static BYTE scsi_unmap(struct NVMeUnit *unit, struct IOStdReq *io)
      * have nothing to translate to. */
     if (!unit_supports_dsm(unit))
     {
-        KprintfH("[nvme] %s: controller does not support DSM\n", __func__);
+        KprintfT("[nvme] %s: controller does not support DSM\n", __func__);
         scsi_make_sense(cmd, 0, 0, IOERR_NOCMD);
         return IOERR_NOCMD;
     }
@@ -797,7 +797,7 @@ static BYTE scsi_unmap(struct NVMeUnit *unit, struct IOStdReq *io)
     UWORD block_desc_len = *(UWORD *)&param[2];
     UWORD nr_ranges = (UWORD)(block_desc_len / 16U);
 
-    KprintfH("[nvme] %s: param_len=%lu block_desc_len=%lu nr_ranges=%lu\n",
+    KprintfT("[nvme] %s: param_len=%lu block_desc_len=%lu nr_ranges=%lu\n",
              __func__, param_len, (ULONG)block_desc_len, (ULONG)nr_ranges);
 
     if (nr_ranges == 0)
@@ -931,7 +931,7 @@ BYTE handle_scsi_cmd(struct IOStdReq *io)
     uint64_t lba;
     ULONG count;
 
-    KprintfH("[nvme] %s: SCSI cmd 0x%02lx (unit %ld)\n", __func__, (ULONG)command[0], unit->unitNumber);
+    KprintfT("[nvme] %s: SCSI cmd 0x%02lx (unit %ld)\n", __func__, (ULONG)command[0], unit->unitNumber);
 
     switch (command[0])
     {

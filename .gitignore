@@ -55,3 +55,6 @@ dkms.conf
 *.dwo
 
 .vscode/
+
+nvme.device/src/nvme/pci.c
+nvme.device/src/nvme/README-internal.md

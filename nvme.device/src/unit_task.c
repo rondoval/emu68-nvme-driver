@@ -173,7 +173,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     ctrl->unit_task = FindTask(NULL);
     Signal(parent, SIGBREAKF_CTRL_F); /* signal success */
 
-    KprintfH("[nvme] %s: controller task running (bar0=%lx)\n", __func__, (ULONG)ctrl->bar0);
+    KprintfT("[nvme] %s: controller task running (bar0=%lx)\n", __func__, (ULONG)ctrl->bar0);
 
     ULONG waitMask = (1UL << ctrl->msgPort->mp_SigBit) |
                      (1UL << timerPort->mp_SigBit) |
@@ -291,7 +291,7 @@ s32 task_spawn(struct NVMeController *ctrl,
                task_entry entry,
                const char *name)
 {
-    KprintfH("[nvme] %s: starting %s\n", __func__, name);
+    KprintfT("[nvme] %s: starting %s\n", __func__, name);
 
     struct MemList *ml = AllocMem(sizeof(struct MemList) + sizeof(struct MemEntry),
                                   MEMF_PUBLIC | MEMF_CLEAR);
@@ -366,7 +366,7 @@ void task_join(struct Task **slot)
     if (!slot || !*slot)
         return;
 
-    KprintfH("[nvme] %s: stopping task=%lx\n", __func__, (ULONG)*slot);
+    KprintfT("[nvme] %s: stopping task=%lx\n", __func__, (ULONG)*slot);
 
     struct MsgPort *timerPort = CreateMsgPort();
     struct timerequest *timerReq = CreateIORequest(timerPort, sizeof(struct timerequest));

@@ -243,7 +243,7 @@ From the superbuild root, the usual validation target is:
 cmake --build build --target emu68-nvme-driver
 ```
 
-Debug backend: append `-DEMU68_DEBUG_BACKEND=serial` (default `pistorm` | `serial` | `off`) — selected stack-wide via `emu68-common`. `pistorm` writes to the Emu68 `0xdeadbeef` debug hook; `serial` routes to the AmigaOS serial console (`debug.lib`, not ROM-able); `off` compiles debug out. The `mounter` submodule's automount diagnostics follow the same setting.
+Debug backend: append `-DEMU68_DEBUG_BACKEND=serial` (default `pistorm` | `serial` | `off`) — selected stack-wide via `emu68-common`. `pistorm` writes to the Emu68 `0xdeadbeef` debug hook; `serial` routes to the AmigaOS serial console (`debug.lib`, not ROM-able); `off` compiles debug out. Verbosity is `-DEMU68_TIER` (`off` | `profile` | `debug` | `trace`, default `debug`); the `mounter` submodule's automount diagnostics follow it too — its error/status output appears at `debug` tier, its per-step tracing only at `trace`.
 
 Cache ops: DMA cache maintenance emits Emu68's private LINE-F range opcode inline. Append `-DEMU68_FORCE_LVO_CACHE_OPS=ON` to route it through the exec `CachePreDMA` / `CachePostDMA` LVOs instead, which is needed when running against an Emu68 build that lacks the opcode.
 

@@ -62,7 +62,7 @@ void nvme_queue_fw_act_work(struct NVMeController *ctrl)
  */
 void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
 {
-    KprintfH("[nvme] AdminWorker: ctrl=%lx parent=%lx\n",
+    KprintfT("[nvme] AdminWorker: ctrl=%lx parent=%lx\n",
              (ULONG)ctrl, (ULONG)parent);
 
     ctrl->adminPort = CreateMsgPort();
@@ -89,7 +89,7 @@ void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
     ctrl->admin_task = FindTask(NULL);
     Signal(parent, SIGBREAKF_CTRL_F);
 
-    KprintfH("[nvme] %s: admin worker running (port=%lx)\n",
+    KprintfT("[nvme] %s: admin worker running (port=%lx)\n",
             __func__, (ULONG)ctrl->adminPort);
 
     ULONG waitMask = (1UL << ctrl->adminPort->mp_SigBit) | (1UL << ctrl->scan_signal) | (1UL << ctrl->fw_act_signal) | SIGBREAKF_CTRL_C;

@@ -1,3 +1,44 @@
+# Release notes — nvme.device 1.3
+
+Changes since v1.2.
+
+> Warning: still a young storage driver — keep current backups and use it at
+> your own risk.
+
+---
+
+## Breaking changes
+
+None.
+
+---
+
+## Build & tooling
+
+### Debug output follows emu68-common's tier ladder
+
+Verbose logging now gates on `TRACE` instead of the old `DEBUG_HIGH`, and logs
+through `KprintfT` instead of `KprintfH`, matching emu68-common's cumulative
+`PROFILE`/`DEBUG`/`TRACE` tier system. The build calls `emu68_debug_definitions()`
+(renamed from `emu68_debug_backend_definitions()`) in both `nvme.device` and the
+`tools` binaries. No behavior change — the `EMU68_DEBUG_BACKEND` selection
+(`pistorm` | `serial` | `off`) still works the same way.
+
+The mounter submodule's diagnostics now split across the same ladder instead of
+following the sink alone: its `printf()` (mount errors/status) is wired to the
+`debug` tier, its `dbg()` (per-step tracing) to `trace`, via
+`emu68_tier_at_least()`. Previously both followed `EMU68_DEBUG_BACKEND != off`
+as one flag. The mounter submodule itself also picked up a cleanup — dead
+`DEBUG_MOUNTER`/`TRACE_LSEG` knobs removed, `MOUNTER_TRACE` now documented.
+
+### Dependencies
+
+Building now requires **`emu68-common` 1.8.0** or later (`emu68_debug_definitions()`
+and `emu68_tier_at_least()` don't exist in 1.7.0). The runtime requirement of
+`bcmpcie.library` 2.0 is unchanged.
+
+---
+
 # Release notes — nvme.device 1.2
 
 Changes since v1.1.
