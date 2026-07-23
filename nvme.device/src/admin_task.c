@@ -56,9 +56,9 @@ void nvme_queue_fw_act_work(struct NVMeController *ctrl)
  *
  * Creates ctrl->adminPort via CreateMsgPort plus the scan + fw_act signal bits, then
  * runs a Wait() loop dispatching by signal mask.  Exits on CTRL_C from
- * task_join, clearing ctrl->admin_task so the joiner can poll.
+ * drv_task_join, clearing ctrl->admin_task so the joiner can poll.
  *
- * Spawned via task_spawn(ctrl, AdminWorker, ...) at probe time.
+ * Spawned via drv_task_spawn(ctrl, AdminWorker, ...) at probe time.
  */
 void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
 {

@@ -28,7 +28,9 @@
 #include <timing.h> /* get_time, delay_us, delay_ms, time_deadline_passed */
 
 #include <nvme/nvme_completion.h>
-#include <device.h>          /* NVMeController/NVMeDevice/NVMeUnit, ERR_*, task_spawn, UnitTask, nvme_int_* */
+#include <device.h>          /* NVMeController/NVMeDevice/NVMeUnit, ERR_*, UnitTask, nvme_int_* */
+#include <config.h>          /* STACK_SIZE, UNIT_TASK_PRIORITY */
+#include <driver_task.h>     /* drv_task_spawn / drv_task_join */
 #include <nvme/nvme_admin.h> /* nvme_configure_timestamp, nvme_configure_host_options */
 #include <nvme/nvme_aen.h>   /* nvme_enable_aen, nvme_submit_aer */
 #include <nvme/nvme_ctrl.h>  /* nvme_admin_ctrl, nvme_change_ctrl_state, nvme_init_identify */
@@ -424,15 +426,17 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
                                                                   : NVME_SMALL_POOL_SIZE,
                     64);
 
-    ret = task_spawn(ctrl, UnitTask, "NVMe storage driver");
-    if (ret != ERR_NO_ERROR)
+    ret = drv_task_spawn(ctrl, UnitTask, "NVMe storage driver",
+                         STACK_SIZE, UNIT_TASK_PRIORITY);
+    if (ret != 0)
     {
         Kprintf("[nvme] %s: UnitTask spawn failed: %ld\n", __func__, ret);
         goto fail_pool;
     }
 
-    ret = task_spawn(ctrl, AdminWorker, "NVMe admin worker");
-    if (ret != ERR_NO_ERROR)
+    ret = drv_task_spawn(ctrl, AdminWorker, "NVMe admin worker",
+                         STACK_SIZE, UNIT_TASK_PRIORITY);
+    if (ret != 0)
     {
         Kprintf("[nvme] %s: AdminWorker spawn failed: %ld\n", __func__, ret);
         goto fail_unit_task;
@@ -527,9 +531,9 @@ fail_admin:
 fail_int:
     nvme_int_shutdown(ctrl);
 fail_admin_task:
-    task_join(&ctrl->admin_task);
+    drv_task_join(&ctrl->admin_task);
 fail_unit_task:
-    task_join(&ctrl->unit_task);
+    drv_task_join(&ctrl->unit_task);
 fail_pool:
     slab_cache_destroy(&ctrl->prp_small_slab);
     slab_cache_destroy(&ctrl->prp_large_slab);
@@ -749,8 +753,8 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         /* Stop AdminWorker BEFORE the unit task: AdminWorker may be
          * parked in nvme_submit_sync_cmd waiting on a CQE that only
          * the unit task delivers. */
-        task_join(&ctrl->admin_task);
-        task_join(&ctrl->unit_task);
+        drv_task_join(&ctrl->admin_task);
+        drv_task_join(&ctrl->unit_task);
         hw_shutdown(ctrl);
 
         if (ctrl->effects)

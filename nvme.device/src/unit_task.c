@@ -15,6 +15,7 @@
 #include <minlist.h>
 
 #include "device.h"
+#include <driver_task.h>    /* drv_task_join (UnitTask/AdminWorker teardown) */
 #include "nvme/nvme_ctrl.h"  /* struct NVMeController, nvme_ctrl_state */
 #include "nvme/nvme_completion.h" /* struct nvme_io_context (stalled re-pump) */
 #include "nvme/nvme_io.h"    /* NVME_IO_ASYNC, nvme_io_context_pump/_finish */
@@ -115,7 +116,7 @@ static void nvme_drain_msgport(struct NVMeController *ctrl)
  * this controller) and ctrl->irq_signal, then enters the main wait loop.
  *
  * Signals parent with SIGBREAKF_CTRL_F on successful startup or
- * SIGBREAKF_CTRL_C on failure so task_spawn() can detect both cases.
+ * SIGBREAKF_CTRL_C on failure so drv_task_spawn() can detect both cases.
  */
 void UnitTask(struct NVMeController *ctrl, struct Task *parent)
 {
@@ -272,134 +273,4 @@ free_msg_port:
 fail:
     ctrl->unit_task = NULL;
     Signal(parent, SIGBREAKF_CTRL_C);
-}
-
-/*
- * task_spawn - allocate stack/Task/MemList and AddTask one of the
- * controller worker tasks (UnitTask, AdminWorker).
- *
- * Pushes (ctrl, parent) onto the new task's stack, AddTasks it, then
- * blocks on SIGBREAKF_CTRL_F (success) or SIGBREAKF_CTRL_C (failure)
- * from the spawned task.  The entry function is expected to clear its
- * own slot on exit so task_join can detect completion.
- *
- * Generic in shape — both UnitTask and AdminWorker share the exact
- * same launch sequence, only their entry function and task name
- * differ.
- */
-s32 task_spawn(struct NVMeController *ctrl,
-               task_entry entry,
-               const char *name)
-{
-    KprintfT("[nvme] %s: starting %s\n", __func__, name);
-
-    struct MemList *ml = AllocMem(sizeof(struct MemList) + sizeof(struct MemEntry),
-                                  MEMF_PUBLIC | MEMF_CLEAR);
-    struct Task *task = AllocMem(sizeof(struct Task), MEMF_PUBLIC | MEMF_CLEAR);
-    ULONG *stack = AllocMem(STACK_SIZE, MEMF_PUBLIC | MEMF_CLEAR);
-
-    if (!ml || !task || !stack)
-    {
-        Kprintf("[nvme] %s: alloc failed for %s\n", __func__, name);
-        if (ml)
-            FreeMem(ml, sizeof(struct MemList) + sizeof(struct MemEntry));
-        if (task)
-            FreeMem(task, sizeof(struct Task));
-        if (stack)
-            FreeMem(stack, STACK_SIZE);
-        return ERR_ALLOC_ERROR;
-    }
-
-    ml->ml_NumEntries = 2;
-    ml->ml_ME[0].me_Un.meu_Addr = task;
-    ml->ml_ME[0].me_Length = sizeof(struct Task);
-    ml->ml_ME[1].me_Un.meu_Addr = stack;
-    ml->ml_ME[1].me_Length = STACK_SIZE;
-
-    task->tc_SPLower = stack;
-    task->tc_SPUpper = &stack[STACK_SIZE / sizeof(ULONG)];
-
-    /* Push entry args (ctrl, parent) onto the initial stack. */
-    ULONG *sp = (ULONG *)task->tc_SPUpper;
-    *--sp = (ULONG)FindTask(NULL);
-    *--sp = (ULONG)ctrl;
-    task->tc_SPReg = sp;
-
-    task->tc_Node.ln_Name = (char *)name;
-    task->tc_Node.ln_Type = NT_TASK;
-    task->tc_Node.ln_Pri = UNIT_TASK_PRIORITY;
-
-    _NewMinList((struct MinList *)&task->tc_MemEntry);
-    AddHead(&task->tc_MemEntry, &ml->ml_Node);
-
-    SetSignal(0UL, SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_C);
-
-    APTR result = AddTask(task, entry, NULL);
-    if (!result)
-    {
-        Kprintf("[nvme] %s: AddTask(%s) failed\n", __func__, name);
-        FreeMem(ml, sizeof(struct MemList) + sizeof(struct MemEntry));
-        FreeMem(task, sizeof(struct Task));
-        FreeMem(stack, STACK_SIZE);
-        return ERR_CONTROLLER_ERROR;
-    }
-
-    ULONG sig = Wait(SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_C);
-    if (sig & SIGBREAKF_CTRL_C)
-    {
-        Kprintf("[nvme] %s: %s failed to initialise\n", __func__, name);
-        return ERR_CONTROLLER_ERROR;
-    }
-
-    return ERR_NO_ERROR;
-}
-
-/*
- * task_join - signal CTRL_C and wait for the task to clear @slot.
- *
- * @slot points to a `struct Task *` field on the controller (e.g.
- * &ctrl->unit_task or &ctrl->admin_task).  The entry function clears it on
- * exit; we poll at 250 ms via timer.device, then free our timer.
- */
-void task_join(struct Task **slot)
-{
-    if (!slot || !*slot)
-        return;
-
-    KprintfT("[nvme] %s: stopping task=%lx\n", __func__, (ULONG)*slot);
-
-    struct MsgPort *timerPort = CreateMsgPort();
-    struct timerequest *timerReq = CreateIORequest(timerPort, sizeof(struct timerequest));
-    BOOL haveTimer = FALSE;
-
-    if (timerPort && timerReq)
-    {
-        BYTE result = OpenDevice((CONST_STRPTR) "timer.device", UNIT_VBLANK, (struct IORequest *)timerReq, LIB_MIN_VERSION);
-        if (result)
-            Kprintf("[nvme] %s: Failed to open timer device: %ld\n", __func__, result);
-        else
-            haveTimer = TRUE;
-    }
-
-    Signal(*slot, SIGBREAKF_CTRL_C);
-
-    while (*slot != NULL)
-    {
-        if (haveTimer)
-        {
-            timerReq->tr_node.io_Command = TR_ADDREQUEST;
-            timerReq->tr_time.tv_secs = 0;
-            timerReq->tr_time.tv_micro = 250000;
-            DoIO(&timerReq->tr_node);
-        }
-    }
-
-    SetSignal(0UL, SIGBREAKF_CTRL_F | SIGBREAKF_CTRL_C);
-
-    if (haveTimer)
-        CloseDevice(&timerReq->tr_node);
-    if (timerReq)
-        DeleteIORequest(&timerReq->tr_node);
-    if (timerPort)
-        DeleteMsgPort(timerPort);
 }

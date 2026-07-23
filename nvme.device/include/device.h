@@ -103,17 +103,8 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags);
 s32 UnitClose(struct NVMeUnit *unit);
 
 /* ------------------------------------------------------------------ */
-/* unit_task.c — generic controller-task lifecycle + UnitTask entry    */
+/* unit_task.c — UnitTask entry (spawn/join via emu68-common driver_task) */
 /* ------------------------------------------------------------------ */
-/* Entry signature shared by all controller worker tasks: receives the
- * owning ctrl and the parent task to signal on init success/failure. */
-typedef void (*task_entry)(struct NVMeController *ctrl, struct Task *parent);
-
-s32 task_spawn(struct NVMeController *ctrl,
-               task_entry entry,
-               const char *name);
-void task_join(struct Task **slot);
-
 void UnitTask(struct NVMeController *ctrl, struct Task *parent);
 
 /* ------------------------------------------------------------------ */
