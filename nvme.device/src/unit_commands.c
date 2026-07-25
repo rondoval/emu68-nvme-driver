@@ -24,7 +24,7 @@
  */
 static inline void reply_io(struct IOStdReq *io, BYTE error)
 {
-    KprintfH("[nvme] reply_io: cmd=0x%04lx unit=%ld error=%ld io_Actual=%lu\n",
+    KprintfT("[nvme] reply_io: cmd=0x%04lx unit=%ld error=%ld io_Actual=%lu\n",
              (ULONG)io->io_Command, ((struct NVMeUnit *)io->io_Unit)->unitNumber,
              error, io->io_Actual);
     io->io_Error = error;
@@ -46,7 +46,7 @@ static inline u64 decode_lba(ULONG io_actual, ULONG io_offset, UWORD blockShift)
 {
     ULONG hi = io_actual >> blockShift;
     ULONG lo = (io_actual << (32u - blockShift)) | (io_offset >> blockShift);
-    KprintfH("[nvme] decode_lba: io_actual=0x%08lx io_offset=0x%08lx blockShift=%lu => lba=0x%08lx%08lx\n",
+    KprintfT("[nvme] decode_lba: io_actual=0x%08lx io_offset=0x%08lx blockShift=%lu => lba=0x%08lx%08lx\n",
              io_actual, io_offset, (ULONG)blockShift, hi, lo);
     return ((u64)hi << 32) | lo;
 }
@@ -170,7 +170,7 @@ void ProcessCommand(struct IOStdReq *io)
         }
         if (nr > NVME_DSM_MAX_RANGES)
         {
-            KprintfH("[nvme] %s: TRIM %lu ranges exceeds DSM cap %lu\n",
+            KprintfT("[nvme] %s: TRIM %lu ranges exceeds DSM cap %lu\n",
                      __func__, nr, (ULONG)NVME_DSM_MAX_RANGES);
             reply_io(io, IOERR_BADLENGTH);
             break;
@@ -194,7 +194,7 @@ void ProcessCommand(struct IOStdReq *io)
             if (blocks == 0 ||
                 (unit->logicalSectors > 0 && slba + blocks > unit->logicalSectors))
             {
-                KprintfH("[nvme] %s: TRIM range[%lu] invalid (lba=0x%08lx%08lx blocks=%lu)\n",
+                KprintfT("[nvme] %s: TRIM range[%lu] invalid (lba=0x%08lx%08lx blocks=%lu)\n",
                          __func__, i, (ULONG)(slba >> 32), (ULONG)slba, blocks);
                 rerr = IOERR_BADADDRESS;
                 break;
@@ -244,7 +244,7 @@ void ProcessCommand(struct IOStdReq *io)
          * (NVME_SC_ABORT_REQ) arrives asynchronously and fires the
          * normal completion path. */
         struct IOStdReq *target = (struct IOStdReq *)io->io_Data;
-        KprintfH("[nvme] %s: internal abort target=%lx\n", __func__, (ULONG)target);
+        KprintfT("[nvme] %s: internal abort target=%lx\n", __func__, (ULONG)target);
         if (unit && unit->ctrl)
         {
             (void)nvme_io_abort(unit->ctrl, target);

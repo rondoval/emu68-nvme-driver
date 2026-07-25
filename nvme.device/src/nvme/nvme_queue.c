@@ -68,7 +68,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
     const ULONG cq_bytes = (ULONG)depth * sizeof(struct nvme_completion);
     const ULONG inflight_bytes = (ULONG)depth * sizeof(struct nvme_request *);
 
-    KprintfH("[nvme] setup_queue: ctrl=%lx q=%lx qid=%lu depth=%lu\n",
+    KprintfT("[nvme] setup_queue: ctrl=%lx q=%lx qid=%lu depth=%lu\n",
              (ULONG)ctrl, (ULONG)q, (ULONG)qid, (ULONG)depth);
 
     memset(q, 0, sizeof(*q));
@@ -144,7 +144,7 @@ fail_sq:
  */
 void nvme_teardown_queue(struct nvme_queue *q)
 {
-    KprintfH("[nvme] teardown_queue: q=%lx qid=%lu sq=%lx cq=%lx inflight=%lx\n",
+    KprintfT("[nvme] teardown_queue: q=%lx qid=%lu sq=%lx cq=%lx inflight=%lx\n",
              (ULONG)q, (ULONG)q->qid,
              (ULONG)q->sq, (ULONG)q->cq, (ULONG)q->inflight);
 
@@ -220,7 +220,7 @@ static void drain_cq(struct nvme_queue *q)
             req->status = status;
             req->result = cqe->result;
             nvme_inflight_release(q, req->cid);
-            KprintfH("[nvme] CQE: qid=%lu head=%lu cid=0x%lx status=0x%04lx (%s) phase=%lu → completing %s\n",
+            KprintfT("[nvme] CQE: qid=%lu head=%lu cid=0x%lx status=0x%04lx (%s) phase=%lu → completing %s\n",
                      (ULONG)q->qid, (ULONG)head, (ULONG)req->cid,
                      (ULONG)status, nvme_get_error_status_str(status), (ULONG)cqe_phase,
                      req->unit ? "I/O" : "admin");
@@ -337,7 +337,7 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
             if ((now - req->abort_us) / 1000U < NVME_ABORT_TIMEOUT)
                 continue;
 
-            KprintfH("[nvme] abort grace expired: qid=%lu cid=0x%lx "
+            KprintfT("[nvme] abort grace expired: qid=%lu cid=0x%lx "
                      "opcode=0x%02lx — escalating\n",
                      (ULONG)q->qid, (ULONG)req->cid,
                      (ULONG)req->cmd.common.opcode);
@@ -445,18 +445,18 @@ s32 nvme_setup_admin_queue(struct NVMeController *ctrl)
 {
     volatile UBYTE *bar = (volatile UBYTE *)ctrl->bar0;
 
-    KprintfH("[nvme] setup_admin_queue: ctrl=%lx\n", (ULONG)ctrl);
+    KprintfT("[nvme] setup_admin_queue: ctrl=%lx\n", (ULONG)ctrl);
 
     /* Doorbell stride = 4 << CAP.DSTRD (DSTRD in CAP[35:32], so bits
      * [3:0] of the high dword).  Must be read before nvme_setup_queue
      * because each queue's sq_db_off / cq_db_off depend on it. */
-#ifdef DEBUG_HIGH     
+#ifdef TRACE     
     u32 cap_lo = mmio_read32(bar + NVME_REG_CAP);
 #endif
     u32 cap_hi = mmio_read32(bar + NVME_REG_CAP + 4);
     u32 dstrd = cap_hi & 0xF;
     ctrl->db_stride = 4UL << dstrd;
-    KprintfH("[nvme] %s: CAP lo=%08lx hi=%08lx → dstrd=%lu, db_stride=%lu\n",
+    KprintfT("[nvme] %s: CAP lo=%08lx hi=%08lx → dstrd=%lu, db_stride=%lu\n",
              __func__, cap_lo, cap_hi, dstrd, ctrl->db_stride);
 
     if (nvme_setup_queue(ctrl, &ctrl->admin_q, 0, NVME_ADMIN_QUEUE_SIZE) != 0)
@@ -563,7 +563,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     union nvme_result result;
     int ret;
 
-    KprintfH("[nvme] setup_io_queue: ctrl=%lx\n", (ULONG)ctrl);
+    KprintfT("[nvme] setup_io_queue: ctrl=%lx\n", (ULONG)ctrl);
 
     /* Step 1: ask for 1 I/O SQ and 1 I/O CQ. */
     nvme_build_set_num_queues(&cmd);
@@ -575,9 +575,9 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
     }
     /* Result dword0: NSQA in [15:0], NCQA in [31:16].  Both are
      * 0-based, so 0 means "1 queue granted". */
-#ifdef DEBUG_HIGH
+#ifdef TRACE
     u32 num_queues = le32(result.u32);
-    KprintfH("[nvme] %s: granted NSQA=%lu NCQA=%lu (both 0-based; we need 1+1)\n",
+    KprintfT("[nvme] %s: granted NSQA=%lu NCQA=%lu (both 0-based; we need 1+1)\n",
              __func__, num_queues & 0xFFFF, num_queues >> 16);
 #endif
 
@@ -605,7 +605,7 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
 
     nvme_set_io_max_inflight(ctrl);
 
-    KprintfH("[nvme] %s: I/O queue pair (QID=%lu) ready, SQ@%lx CQ@%lx\n",
+    KprintfT("[nvme] %s: I/O queue pair (QID=%lu) ready, SQ@%lx CQ@%lx\n",
              __func__, (ULONG)NVME_IO_QID,
              (ULONG)ctrl->io_q.sq, (ULONG)ctrl->io_q.cq);
     return 0;
@@ -645,7 +645,7 @@ static void nvme_io_setup_async_sq(struct nvme_request *req)
     }
 
     nvme_set_io_max_inflight(ctrl);
-    KprintfH("[nvme] reset: I/O queue pair (QID=%lu) ready (async)\n",
+    KprintfT("[nvme] reset: I/O queue pair (QID=%lu) ready (async)\n",
              (ULONG)NVME_IO_QID);
     nvme_reset_finish(ctrl, TRUE);
 }
@@ -721,7 +721,7 @@ void nvme_reset_rebuild_io_async(struct NVMeController *ctrl)
 {
     struct nvme_command cmd;
 
-    KprintfH("[nvme] reset: starting async I/O-queue bring-up\n");
+    KprintfT("[nvme] reset: starting async I/O-queue bring-up\n");
     nvme_build_set_num_queues(&cmd);
     if (nvme_submit_async_cmd(ctrl, &cmd, NULL, 0,
                               nvme_io_setup_async_features, ctrl, 0) != 0)
@@ -745,7 +745,7 @@ void nvme_reset_rebuild_io_async(struct NVMeController *ctrl)
  */
 void nvme_cancel_request(struct nvme_request *req)
 {
-    KprintfH("[nvme] cancel: cid 0x%lx\n", (ULONG)req->cid);
+    KprintfT("[nvme] cancel: cid 0x%lx\n", (ULONG)req->cid);
     req->status = NVME_SC_HOST_ABORTED_CMD;
     req->flags |= NVME_REQ_CANCELLED;
     nvme_complete_rq(req);

@@ -66,7 +66,7 @@ static int nvme_set_host_mem(struct NVMeController *ctrl, u32 bits)
     u32 host_mem_size_pages = (u32)(ctrl->hmb_size / NVME_CTRL_PAGE_SIZE);
     u64 dma_addr = (u64)(ULONG)ctrl->hmb_descs;
 
-    KprintfH("[nvme] %s: bits=0x%lx host_mem_size_pages=%lu desc_dma=%lx nr_descs=%lu\n",
+    KprintfT("[nvme] %s: bits=0x%lx host_mem_size_pages=%lu desc_dma=%lx nr_descs=%lu\n",
              __func__, (ULONG)bits, (ULONG)host_mem_size_pages,
              (ULONG)dma_addr, (ULONG)ctrl->hmb_nr_descs);
 
@@ -170,7 +170,7 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
             descs[0].rsvd = 0;
             total_allocated = preferred;
             chunks_allocated = 1;
-            KprintfH("[nvme] %s: phase 1 success: one %lu KiB block @ %lx\n",
+            KprintfT("[nvme] %s: phase 1 success: one %lu KiB block @ %lx\n",
                      __func__, (ULONG)(preferred >> 10), (ULONG)buf);
         }
     }
@@ -197,13 +197,13 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
             descs[chunks_allocated].rsvd = 0;
             total_allocated += chunk_size;
             chunks_allocated++;
-            KprintfH("[nvme] %s: phase 2 chunk[%lu] @ %lx size=%lu KiB total_allocated=%lu KiB\n",
+            KprintfT("[nvme] %s: phase 2 chunk[%lu] @ %lx size=%lu KiB total_allocated=%lu KiB\n",
                      __func__, (ULONG)(chunks_allocated - 1), (ULONG)buf,
                      (ULONG)(chunk_size >> 10), (ULONG)(total_allocated >> 10));
         }
         else
         {
-            KprintfH("[nvme] %s: phase 2 attempt %lu KiB failed; halving\n",
+            KprintfT("[nvme] %s: phase 2 attempt %lu KiB failed; halving\n",
                      __func__, (ULONG)(attempt >> 10));
             attempt /= 2;
         }
@@ -224,7 +224,7 @@ static int nvme_alloc_host_mem(struct NVMeController *ctrl,
      * before announcing it via Set Features. */
     nvme_cache_flush(descs, descs_size, TRUE);
 
-    KprintfH("[nvme] %s: allocated %lu KiB in %lu chunks (target %lu KiB, min %lu KiB)\n",
+    KprintfT("[nvme] %s: allocated %lu KiB in %lu chunks (target %lu KiB, min %lu KiB)\n",
              __func__, (ULONG)(total_allocated >> 10), (ULONG)chunks_allocated,
              (ULONG)(preferred >> 10), (ULONG)(min >> 10));
     return 0;
@@ -324,7 +324,7 @@ void nvme_free_host_mem(struct NVMeController *ctrl)
     if (!ctrl || !ctrl->hmb_descs)
         return;
 
-    KprintfH("[nvme] %s: releasing %lu MiB HMB\n", __func__, (ULONG)(ctrl->hmb_size >> 20));
+    KprintfT("[nvme] %s: releasing %lu MiB HMB\n", __func__, (ULONG)(ctrl->hmb_size >> 20));
 
     (void)nvme_set_host_mem(ctrl, 0); /* clear NVME_HOST_MEM_ENABLE */
     hmb_chunks_free(ctrl);

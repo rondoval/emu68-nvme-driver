@@ -187,7 +187,7 @@ free_lists:
 static int nvme_setup_dsm(struct nvme_request *req, struct nvme_dsm_range *ranges,
                           u16 nr)
 {
-    KprintfH("[nvme] setup_dsm: req=%lx nsid=%lu nr=%lu\n",
+    KprintfT("[nvme] setup_dsm: req=%lx nsid=%lu nr=%lu\n",
              (ULONG)req,
              (ULONG)(req->unit ? req->unit->nsid : 0),
              (ULONG)nr);
@@ -228,7 +228,7 @@ static int nvme_setup_dsm(struct nvme_request *req, struct nvme_dsm_range *range
  */
 static void nvme_setup_flush(struct nvme_request *req)
 {
-    KprintfH("[nvme] setup_flush: req=%lx nsid=%lu\n",
+    KprintfT("[nvme] setup_flush: req=%lx nsid=%lu\n",
              (ULONG)req,
              (ULONG)(req->unit ? req->unit->nsid : 0));
 
@@ -303,7 +303,7 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
 {
     const u32 bytes = count << (req->unit ? req->unit->blockShift : 9);
 
-    KprintfH("[nvme] setup_rw: opcode=0x%02lx (%s) nsid=%lu lba=0x%08lx%08lx count=%lu bytes=%lu buf=%lx\n",
+    KprintfT("[nvme] setup_rw: opcode=0x%02lx (%s) nsid=%lu lba=0x%08lx%08lx count=%lu bytes=%lu buf=%lx\n",
              (ULONG)opcode, nvme_get_opcode_str(opcode),
              (ULONG)(req->unit ? req->unit->nsid : 0),
              (ULONG)(lba >> 32), (ULONG)lba, count, bytes, (ULONG)buffer);
@@ -606,7 +606,7 @@ BYTE nvme_submit_io(struct nvme_request *req)
 
     req->submit_us = get_time();
 
-    KprintfH("[nvme] submit_io: qid=%lu cid=0x%lx opcode=0x%02lx (%s) slot=%lu next=%lu db_off=0x%lx\n",
+    KprintfT("[nvme] submit_io: qid=%lu cid=0x%lx opcode=0x%02lx (%s) slot=%lu next=%lu db_off=0x%lx\n",
              (ULONG)q->qid,
              (ULONG)req->cid,
              (ULONG)req->cmd.common.opcode,
@@ -799,7 +799,7 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
         ctx->dispatched += next_bytes;
         ctx->inflight++;
 
-        KprintfH("[nvme] ctx_pump: dispatched chunk ctx=%lx cid=0x%lx offset=%lu bytes=%lu inflight=%lu\n",
+        KprintfT("[nvme] ctx_pump: dispatched chunk ctx=%lx cid=0x%lx offset=%lu bytes=%lu inflight=%lu\n",
                  (ULONG)ctx, (ULONG)req->cid,
                  (ULONG)(ctx->dispatched - next_bytes),
                  (ULONG)next_bytes, (ULONG)ctx->inflight);
@@ -856,7 +856,7 @@ void nvme_io_context_finish(struct nvme_io_context *ctx)
     io->io_Error = err;
     io->io_Actual = err ? 0 : ctx->total_bytes;
 
-    KprintfH("[nvme] ctx_finish: io=%lx err=%ld actual=%lu (ctx=%lx)\n",
+    KprintfT("[nvme] ctx_finish: io=%lx err=%ld actual=%lu (ctx=%lx)\n",
              (ULONG)io, (LONG)err, (ULONG)io->io_Actual, (ULONG)ctx);
 
     ReplyMsg((struct Message *)io);
@@ -899,21 +899,21 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
 
     if (unlikely(bytes == 0))
     {
-        KprintfH("[nvme] %s: zero-length transfer (blocks=%lu blockShift=%lu)\n",
+        KprintfT("[nvme] %s: zero-length transfer (blocks=%lu blockShift=%lu)\n",
                  __func__, blocks, (ULONG)unit->blockShift);
         return IOERR_BADLENGTH;
     }
 
     if (unlikely(buffer == NULL))
     {
-        KprintfH("[nvme] %s: NULL buffer for opcode 0x%02lx (unit %ld)\n",
+        KprintfT("[nvme] %s: NULL buffer for opcode 0x%02lx (unit %ld)\n",
                  __func__, (ULONG)opcode, unit->unitNumber);
         return IOERR_BADADDRESS;
     }
 
     if (unlikely(unit->logicalSectors > 0 && lba + blocks > unit->logicalSectors))
     {
-        KprintfH("[nvme] %s: LBA out of range (lba=0x%08lx%08lx blocks=%lu logicalSectors=%lu)\n",
+        KprintfT("[nvme] %s: LBA out of range (lba=0x%08lx%08lx blocks=%lu logicalSectors=%lu)\n",
                  __func__, (ULONG)(lba >> 32), (ULONG)lba, blocks,
                  (ULONG)unit->logicalSectors);
         return IOERR_BADADDRESS;
@@ -930,7 +930,7 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
         if (unlikely(!nvme_check_ready(ctrl)))
             return nvme_fail_nonready_command(req);
 
-        KprintfH("[nvme] io_submit_rw: single-shot io_Length=%lu lba=0x%08lx%08lx\n",
+        KprintfT("[nvme] io_submit_rw: single-shot io_Length=%lu lba=0x%08lx%08lx\n",
                  bytes, (ULONG)(lba >> 32), (ULONG)lba);
 
         BYTE serr = nvme_setup_rw(req, lba, blocks, opcode, buffer);
@@ -970,7 +970,7 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
         ctx->data_precached = 1;
     }
 
-    KprintfH("[nvme] io_submit_rw: ctx=%lx io_Length=%lu chunk_cap=%lu precached=%lu — multi-chunk\n",
+    KprintfT("[nvme] io_submit_rw: ctx=%lx io_Length=%lu chunk_cap=%lu precached=%lu — multi-chunk\n",
              (ULONG)ctx, bytes, (ULONG)cap, (ULONG)ctx->data_precached);
 
     BYTE err = nvme_io_context_pump(ctx);
@@ -1021,13 +1021,13 @@ BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
 
     if (unlikely(blocks == 0))
     {
-        KprintfH("[nvme] %s: zero-length write-zeroes\n", __func__);
+        KprintfT("[nvme] %s: zero-length write-zeroes\n", __func__);
         return IOERR_BADLENGTH;
     }
 
     if (unlikely(unit->logicalSectors > 0 && lba + blocks > unit->logicalSectors))
     {
-        KprintfH("[nvme] %s: write-zeroes LBA out of range (lba=0x%08lx%08lx blocks=%lu logicalSectors=%lu)\n",
+        KprintfT("[nvme] %s: write-zeroes LBA out of range (lba=0x%08lx%08lx blocks=%lu logicalSectors=%lu)\n",
                  __func__, (ULONG)(lba >> 32), (ULONG)lba, blocks,
                  (ULONG)unit->logicalSectors);
         return IOERR_BADADDRESS;
@@ -1048,7 +1048,7 @@ BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
 
     if (ctrl->max_zeroes_sectors == 0)
     {
-        KprintfH("[nvme] %s: write-zeroes unsupported (max_zeroes_sectors=0)\n", __func__);
+        KprintfT("[nvme] %s: write-zeroes unsupported (max_zeroes_sectors=0)\n", __func__);
         return IOERR_NOCMD;
     }
 

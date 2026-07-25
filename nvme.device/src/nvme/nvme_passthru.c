@@ -74,7 +74,7 @@ static u32 nvme_command_effects(struct NVMeController *ctrl, struct nvme_ns *ns,
         effects = le32(ns->effects->iocs[opcode]);
         if (effects & ~(u32)(NVME_CMD_EFFECTS_CSUPP | NVME_CMD_EFFECTS_LBCC))
         {
-            KprintfH("[nvme] IO command:%02lx has unusual effects:%08lx\n", opcode, effects);
+            KprintfT("[nvme] IO command:%02lx has unusual effects:%08lx\n", opcode, effects);
         }
 
         /* CSE bits would request an I/O-queue freeze, which would
@@ -148,7 +148,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
 {
     struct NVMePassthruCmd *uc = (struct NVMePassthruCmd *)io->io_Data;
 
-    KprintfH("[nvme] passthru: cmd=0x%04lx opcode=0x%02lx (%s) nsid=%lu data_len=%lu\n",
+    KprintfT("[nvme] passthru: cmd=0x%04lx opcode=0x%02lx (%s) nsid=%lu data_len=%lu\n",
              (ULONG)io->io_Command, (ULONG)uc->pt_Opcode,
              nvme_get_admin_opcode_str(uc->pt_Opcode),
              (ULONG)uc->pt_Nsid, (ULONG)uc->pt_DataLen);
@@ -160,9 +160,9 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     enum nvme_ctrl_state state = nvme_ctrl_state(ctrl);
     if (state != NVME_CTRL_LIVE)
     {
-#ifdef DEBUG_HIGH
+#ifdef TRACE
         BOOL terminal = nvme_state_terminal(ctrl);
-        KprintfH("[nvme] passthru: ctrl not LIVE (state=%ld) — rejecting %s\n",
+        KprintfT("[nvme] passthru: ctrl not LIVE (state=%ld) — rejecting %s\n",
                  (LONG)state, terminal ? "terminally" : "transiently");
 #endif
         reply_passthru(io, IOERR_UNITBUSY);
@@ -223,7 +223,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
         }
         CopyMem(uc->pt_Addr, bounce, uc->pt_DataLen);
         dma_buf = bounce;
-        KprintfH("[nvme] passthru: bounce=%lx (user=%lx, %lu B)\n",
+        KprintfT("[nvme] passthru: bounce=%lx (user=%lx, %lu B)\n",
                  (ULONG)bounce, (ULONG)uc->pt_Addr, (ULONG)uc->pt_DataLen);
     }
 
@@ -279,7 +279,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     }
 
     io->io_Actual = uc->pt_DataLen;
-    KprintfH("[nvme] passthru: done status=0x%lx (%s) result=0x%08lx\n",
+    KprintfT("[nvme] passthru: done status=0x%lx (%s) result=0x%08lx\n",
              (ULONG)status, nvme_get_error_status_str((u16)status), (ULONG)uc->pt_Result);
     reply_passthru(io, (BYTE)(status & 0xff));
 }

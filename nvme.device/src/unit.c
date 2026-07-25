@@ -30,7 +30,7 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
 #endif
     struct NVMeController *ctrl = unit->ctrl;
 
-    KprintfH("[nvme] UnitOpen: unit=%lx unitNumber=%ld nsid=%lu flags=0x%lx ctrl=%lx\n",
+    KprintfT("[nvme] UnitOpen: unit=%lx unitNumber=%ld nsid=%lu flags=0x%lx ctrl=%lx\n",
              (ULONG)unit, unitNumber, unit->nsid, flags,
              (ULONG)ctrl);
 
@@ -89,7 +89,7 @@ static void nvme_unit_close_flush(struct NVMeUnit *unit)
     io.io_Unit = (struct Unit *)unit;
     io.io_Command = CMD_UPDATE;
 
-    KprintfH("[nvme] %s: flushing unit %ld on last close\n",
+    KprintfT("[nvme] %s: flushing unit %ld on last close\n",
              __func__, unit->unitNumber);
     PutMsg(ctrl->msgPort, &io.io_Message);
     WaitPort(port);
@@ -110,7 +110,7 @@ s32 UnitClose(struct NVMeUnit *unit)
 {
     struct NVMeController *ctrl = unit->ctrl;
 
-    KprintfH("[nvme] UnitClose: unit=%lx unitNumber=%ld ctrl=%lx\n",
+    KprintfT("[nvme] UnitClose: unit=%lx unitNumber=%ld ctrl=%lx\n",
              (ULONG)unit, unit->unitNumber, (ULONG)ctrl);
 
     if (unit->unit.unit_OpenCnt > 0)
