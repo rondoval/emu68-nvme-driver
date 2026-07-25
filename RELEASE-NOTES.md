@@ -31,6 +31,12 @@ following the sink alone: its `printf()` (mount errors/status) is wired to the
 as one flag. The mounter submodule itself also picked up a cleanup — dead
 `DEBUG_MOUNTER`/`TRACE_LSEG` knobs removed, `MOUNTER_TRACE` now documented.
 
+### Worker task setup uses the shared helpers
+
+The driver's worker-task setup now uses emu68-common's shared `drv_task_spawn` /
+`drv_task_join` helpers instead of an open-coded copy, keeping task management consistent
+across the driver stack.
+
 ### Dependencies
 
 Building now requires **`emu68-common` 1.8.0** or later (`emu68_debug_definitions()`
