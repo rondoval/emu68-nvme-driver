@@ -11,6 +11,7 @@
 #endif
 
 #include <libraries/pci_constants.h> /* PCI_IRQ_* flags */
+#include <libraries/pci_irq.h>
 
 #include "nvme/nvme_ctrl.h"
 #include "device.h"
@@ -76,29 +77,20 @@ static s32 nvme_pci_int_enable(struct NVMeController *ctrl)
     if (DEVICE_USE_MSIX)
         flags |= PCI_IRQ_MSIX;
 
-    LONG nvec = AllocIntVectors(ctrl->pci_dev, 1, 1, flags);
-    if (nvec < 1)
+    ULONG itype = 0;
+    LONG rc = pci_irq_attach(pcielibBase, ctrl->pci_dev, &ctrl->irq_isr, flags, &itype);
+    if (rc != 0)
     {
-        Kprintf("[nvme] %s: AllocIntVectors failed: %s (%ld)\n", __func__,
-                pcie_strerror(nvec), (LONG)nvec);
+        Kprintf("[nvme] %s: interrupt attach failed: %s (%ld)\n", __func__,
+                pcie_strerror(rc), rc);
         return -1;
     }
 
     /* Message-signalled (MSI or MSI-X) vs INTx steers the ISR's masking path. */
-    ULONG itype = GetIntVectorType(ctrl->pci_dev);
     ctrl->msi_enabled = (itype != PCI_IRQ_INTX);
     Kprintf("[nvme] %s: using %s\n", __func__,
             itype == PCI_IRQ_MSIX ? "MSI-X" : itype == PCI_IRQ_MSI ? "MSI"
                                                                    : "INTx");
-
-    LONG rc = AddIntVectorServer(ctrl->pci_dev, 0, &ctrl->irq_isr);
-    if (rc != 0)
-    {
-        Kprintf("[nvme] %s: AddIntVectorServer failed: %s (%ld)\n", __func__,
-                pcie_strerror(rc), rc);
-        FreeIntVectors(ctrl->pci_dev);
-        return -1;
-    }
 
     return ERR_NO_ERROR;
 }
@@ -132,8 +124,7 @@ void nvme_int_shutdown(struct NVMeController *ctrl)
     struct Library *pcielibBase = ctrl->device->pcieBase;
 
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
-    RemIntVectorServer(ctrl->pci_dev, 0, &ctrl->irq_isr);
-    FreeIntVectors(ctrl->pci_dev);
+    pci_irq_detach(pcielibBase, ctrl->pci_dev, &ctrl->irq_isr);
     ctrl->msi_enabled = FALSE;
 }
 

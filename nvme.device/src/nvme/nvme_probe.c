@@ -127,6 +127,9 @@ static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
     u32 start_us = get_time();
     u32 deadline_us = start_us + timeout * 1000000U;
     int polls = 0;
+#ifndef TRACE
+    (void)polls; /* only referenced by trace-tier logging below */
+#endif
 
     KprintfT("[nvme] wait_ready(%s): mask=%08lx val=%08lx timeout=%lu s\n",
              op, (ULONG)mask, (ULONG)val, (ULONG)timeout);

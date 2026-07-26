@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(emu68-nvme-driver VERSION 1.3)
+project(emu68-nvme-driver VERSION 1.4)
 
 string(TIMESTAMP CURRENT_DATE "(%d.%m.%Y)")
 set(VERSTRING "$VER: ${PROJECT_NAME} ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR} ${CURRENT_DATE}")

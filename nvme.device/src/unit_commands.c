@@ -123,6 +123,7 @@ void ProcessCommand(struct IOStdReq *io)
     case NSCMD_ETD_READ64:
         direction = READ;
         /* fall through to shared read/write handling */
+        __attribute__((fallthrough));
 
     case CMD_WRITE:
     case ETD_WRITE:

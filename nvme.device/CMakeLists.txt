@@ -9,7 +9,6 @@ emu68_cache_ops_definitions()
 
 # Toolchain and compile options
 add_link_options(
-    -ffreestanding
     -nostdlib
     -nostartfiles
     -s
@@ -19,6 +18,8 @@ add_link_options(
 add_compile_options(
     -O3
     -m68040
+    -ffreestanding
+    -fomit-frame-pointer
     -Wall
     -Wextra
     -Wconversion
@@ -26,7 +27,6 @@ add_compile_options(
     -Wshadow
     -Wmissing-prototypes
     -Wstrict-prototypes
-    -fomit-frame-pointer
 )
 
 add_compile_definitions(

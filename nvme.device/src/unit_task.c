@@ -15,7 +15,8 @@
 #include <minlist.h>
 
 #include "device.h"
-#include <driver_task.h>    /* drv_task_join (UnitTask/AdminWorker teardown) */
+#include <driver_task.h>  /* drv_task_join (UnitTask/AdminWorker teardown) */
+#include <drv_timer.h>
 #include "nvme/nvme_ctrl.h"  /* struct NVMeController, nvme_ctrl_state */
 #include "nvme/nvme_completion.h" /* struct nvme_io_context (stalled re-pump) */
 #include "nvme/nvme_io.h"    /* NVME_IO_ASYNC, nvme_io_context_pump/_finish */
@@ -148,28 +149,13 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     }
 
     // Create a watchdog timer to check for command timeouts
-    struct MsgPort *timerPort = CreateMsgPort();
-    struct timerequest *timerReq = CreateIORequest(timerPort, sizeof(struct timerequest));
-    if (!timerPort || !timerReq)
+    struct drv_timer tick;
+    if (!drv_timer_open(&tick))
     {
-        Kprintf("[nvme] %s: failed to create timer resources\n", __func__);
-        goto free_timer_handles;
+        Kprintf("[nvme] %s: failed to open timer.device\n", __func__);
+        goto free_reset_signal;
     }
-
-    LONG ret = OpenDevice((CONST_STRPTR)TIMERNAME, UNIT_MICROHZ,
-                          (struct IORequest *)timerReq, LIB_MIN_VERSION);
-    if (ret)
-    {
-        Kprintf("[nvme] %s: failed to open timer.device (%ld)\n", __func__, ret);
-        goto free_timer_handles;
-    }
-
-    const u32 delay = UNIT_TASK_POLL_DELAY_MS * 1000UL; /* µs */
-
-    timerReq->tr_node.io_Command = TR_ADDREQUEST;
-    timerReq->tr_time.tv_secs = 0;
-    timerReq->tr_time.tv_micro = delay;
-    SendIO(&timerReq->tr_node);
+    drv_timer_arm_ms(&tick, UNIT_TASK_POLL_DELAY_MS);
 
     ctrl->unit_task = FindTask(NULL);
     Signal(parent, SIGBREAKF_CTRL_F); /* signal success */
@@ -177,7 +163,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
     KprintfT("[nvme] %s: controller task running (bar0=%lx)\n", __func__, (ULONG)ctrl->bar0);
 
     ULONG waitMask = (1UL << ctrl->msgPort->mp_SigBit) |
-                     (1UL << timerPort->mp_SigBit) |
+                     drv_timer_sigmask(&tick) |
                      (1UL << ctrl->irq_signal) |
                      (1UL << ctrl->reset_signal) |
                      SIGBREAKF_CTRL_C;
@@ -202,17 +188,13 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
             nvme_reset_controller(ctrl);
         }
 
-        if (sigset & (1UL << timerPort->mp_SigBit))
+        if (sigset & drv_timer_sigmask(&tick))
         {
-            if (CheckIO(&timerReq->tr_node))
-                WaitIO(&timerReq->tr_node);
+            drv_timer_consume(&tick);
 
             nvme_tick_watchdog(ctrl);
 
-            timerReq->tr_node.io_Command = TR_ADDREQUEST;
-            timerReq->tr_time.tv_secs = 0;
-            timerReq->tr_time.tv_micro = delay;
-            SendIO(&timerReq->tr_node);
+            drv_timer_arm_ms(&tick, UNIT_TASK_POLL_DELAY_MS);
         }
 
         /* Dispatch queued I/O last — after completions are reaped — so a
@@ -225,8 +207,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
         if (sigset & SIGBREAKF_CTRL_C)
         {
             Kprintf("[nvme] %s: controller task stopping\n", __func__);
-            AbortIO(&timerReq->tr_node);
-            WaitIO(&timerReq->tr_node);
+            drv_timer_cancel(&tick);
         }
 
     } while ((sigset & SIGBREAKF_CTRL_C) == 0);
@@ -254,23 +235,20 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
         }
     }
 
-    CloseDevice(&timerReq->tr_node);
-free_timer_handles:
-    if (timerReq)
-        DeleteIORequest((struct IORequest *)timerReq);
-    if (timerPort)
-        DeleteMsgPort(timerPort);
+    drv_timer_close(&tick);
+free_reset_signal:
     FreeSignal(ctrl->reset_signal);
 free_irq_signal:
     FreeSignal(ctrl->irq_signal);
 free_msg_port:
     DeleteMsgPort(ctrl->msgPort);
     ctrl->msgPort = NULL;
-    ctrl->unit_task = NULL;
-    Signal(parent, SIGBREAKF_CTRL_C);
+    /* drv_task_exit clears the liveness slot first (drv_task_join polls it),
+     * then reports CTRL_F for a task that ran / CTRL_C for one that never got
+     * to its loop. */
+    drv_task_exit(&ctrl->unit_task, parent, ctrl->unit_task != NULL);
     return;
 
 fail:
-    ctrl->unit_task = NULL;
-    Signal(parent, SIGBREAKF_CTRL_C);
+    drv_task_exit(&ctrl->unit_task, parent, FALSE);
 }
