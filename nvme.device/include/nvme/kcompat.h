@@ -29,10 +29,19 @@ static inline void nvme_cache_flush(void *addr, ULONG len, BOOL to_device)
 /* NoSync variant: defers the batch's closing barrier to a later non-NoSync op.
  * In this driver that closer is ALWAYS the SQE flush in nvme_submit_io — the
  * unconditional last clean before any doorbell (immediate or batched), so PRP
- * and data flushes for the same command may all ride NoSync. See cache_ops.h. */
+ * and data flushes for the same command may all ride NoSync. See cache_ops.h.
+ *
+ * Unlike nvme_cache_flush, the read direction here is DMA_WriteToRAM — an
+ * INVALIDATE, discarding dirty destination lines instead of writing them back
+ * to DRAM just before the device overwrites them.  That is correct because
+ * this wrapper's only read-direction callers are the IO data-path pre-arms
+ * (nvme_setup_rw and the multi-chunk precache): read destinations the device
+ * fully overwrites, whole-line by the nvme_needs_bounce gate.  Init, admin
+ * and any bidirectional buffer must keep using nvme_cache_flush. */
 static inline void nvme_cache_flush_ns(void *addr, ULONG len, BOOL to_device)
 {
-	cache_pre_dma((APTR)addr, len, (to_device ? DMA_ReadFromRAM : 0) | DMAF_NoSync);
+	cache_pre_dma((APTR)addr, len,
+	              (to_device ? DMA_ReadFromRAM : DMA_WriteToRAM) | DMAF_NoSync);
 }
 
 /* Post-DMA: invalidate stale CPU lines after the device wrote @addr (NVMe read,
