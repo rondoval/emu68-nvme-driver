@@ -3,9 +3,6 @@
 
 #include <strutil.h>
 
-struct ExecBase *SysBase;
-struct DosLibrary *DOSBase;
-
 static const char verstag[] __attribute__((used)) = VERSTAG;
 
 enum
@@ -261,18 +258,11 @@ static int dispatch_command(CONST_STRPTR command, CONST_STRPTR subcommand,
 
 int main(void)
 {
-    SysBase = *(struct ExecBase **)4UL;
-
-    DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 0);
-    if (!DOSBase)
-        return RETURN_FAIL;
-
     LONG argvals[ARG_COUNT] = { 0 };
     struct RDArgs *rda = ReadArgs((CONST_STRPTR)NVMEADM_ARG_TEMPLATE, argvals, NULL);
     if (!rda)
     {
         PrintFault(IoErr(), (CONST_STRPTR)"nvmeadm");
-        CloseLibrary((struct Library *)DOSBase);
         return RETURN_ERROR;
     }
 
@@ -306,6 +296,5 @@ int main(void)
     /* The command words and FILE string live in ReadArgs' buffers, so the
      * args must stay allocated until dispatch returns. */
     FreeArgs(rda);
-    CloseLibrary((struct Library *)DOSBase);
     return rc;
 }

@@ -15,8 +15,6 @@
 #include <libraries/pcitags.h>
 #include <iomem.h>
 
-struct ExecBase    *SysBase;
-struct DosLibrary  *DOSBase;
 struct Library     *BCMPCIEBase;
 
 static const char verstag[] __attribute__((used)) = VERSTAG;
@@ -279,16 +277,9 @@ static void dump_nvme_regs(volatile UBYTE *bar0)
 
 int main(void)
 {
-    SysBase = *(struct ExecBase **)4UL;
-
-    DOSBase = (struct DosLibrary *)OpenLibrary((CONST_STRPTR)"dos.library", 0);
-    if (!DOSBase)
-        return 50;
-
     BCMPCIEBase = OpenLibrary((CONST_STRPTR)"bcmpcie.library", 1);
     if (!BCMPCIEBase) {
         Printf((CONST_STRPTR)"Failed to open bcmpcie.library\n");
-        CloseLibrary((struct Library *)DOSBase);
         return 10;
     }
 
@@ -316,6 +307,5 @@ int main(void)
                NVME_CLASS_CODE);
 
     CloseLibrary(BCMPCIEBase);
-    CloseLibrary((struct Library *)DOSBase);
     return 0;
 }
