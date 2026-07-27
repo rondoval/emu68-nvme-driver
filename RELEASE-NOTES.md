@@ -13,6 +13,18 @@ None.
 
 ---
 
+## Reliability
+
+### Firmware gate for rangeops builds
+
+Builds using the inline Emu68 range cache opcodes (`EMU68_FORCE_LVO_CACHE_OPS`
+off — the `-rangeops` stack archives) now check the `/emu68` device-tree
+node's `dcache-range-ops` capability at init and refuse to load on firmware
+that would Line-F trap on those opcodes, instead of crashing. Standard (LVO)
+builds are unaffected.
+
+---
+
 ## Bug fixes
 
 ### Mounter: fixed a use of uninitialized data on LSEG read failure
