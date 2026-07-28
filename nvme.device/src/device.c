@@ -17,6 +17,7 @@
 #include <dos/dos.h>
 
 #include <libraries/openpci.h>
+#include <emu68_features.h>
 #include <minlist.h>
 
 #include "device.h"
@@ -89,6 +90,12 @@ static struct Resident const nvmeDeviceResident __attribute__((used, no_reorder)
  */
 static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"))
 {
+    if (!emu68_has_dcache_range_ops())
+    {
+        Kprintf("[nvme] %s: rangeops build, but Emu68 lacks dcache-range-ops rev 1 - refusing to load. Install the standard driver package or update Emu68.\n", __func__);
+        return NULL;
+    }
+
     /* MakeLibrary macro uses old-style '()' function pointer — suppress the warning */
 #pragma GCC diagnostic push
 #pragma GCC diagnostic ignored "-Wstrict-prototypes"

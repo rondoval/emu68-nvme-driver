@@ -1,3 +1,81 @@
+# Release notes — nvme.device 1.4
+
+Changes since v1.3.
+
+> Warning: still a young storage driver — keep current backups and use it at
+> your own risk.
+
+---
+
+## Breaking changes
+
+None.
+
+---
+
+## Reliability
+
+### Firmware gate for rangeops builds
+
+Builds using the inline Emu68 range cache opcodes (`EMU68_FORCE_LVO_CACHE_OPS`
+off — the `-rangeops` stack archives) now check the `/emu68` device-tree
+node's `dcache-range-ops` capability at init and refuse to load on firmware
+that would Line-F trap on those opcodes, instead of crashing. Standard (LVO)
+builds are unaffected.
+
+---
+
+## Bug fixes
+
+### Mounter: fixed a use of uninitialized data on LSEG read failure
+
+`lseg_read_long()` unconditionally combined `lseg_read_longs()`'s output
+buffer into its result and stashed it in `md->lsegwordbuf`, even when the
+read had failed and left that buffer untouched — a real (if narrow) read of
+uninitialized stack memory on a truncated/failed LSEG chain. Both writes are now gated on the read actually succeeding.
+
+---
+
+## Build & tooling
+
+### GCC 16.1 build portability
+
+The driver now builds cleanly under GCC 16.1. None of this changes behavior:
+
+- `-ffreestanding` moved from link options to compile options, where it
+  actually affects code generation — as a link-only flag it was silently
+  inert.
+- `ProcessCommand`'s intentional `CMD_READ`-into-`CMD_WRITE` fall-through now
+  carries `__attribute__((fallthrough))`.
+- `nvme_wait_ready`'s poll counter is explicitly cast to void under
+  `!TRACE`, where it's incremented but (with trace logging compiled out)
+  never read.
+
+### Interrupt setup uses the shared PCIe IRQ helper
+
+`nvme_pci_int_enable` / `nvme_int_shutdown` now call `bcmpcie.library`'s new
+`pci_irq_attach()` / `pci_irq_detach()` inline helpers instead of open-coding
+the `AllocIntVectors` → `GetIntVectorType` → `AddIntVectorServer` sequence
+(and its `RemIntVectorServer` / `FreeIntVectors` teardown) directly. Same
+typed multi-vector API introduced in `bcmpcie.library` 2.0, same MSI-X → MSI →
+INTx preference — just no longer duplicated per driver. No functional change.
+
+### Unit-task watchdog timer uses the shared `drv_timer` helper
+
+The controller watchdog tick in `UnitTask` now uses `emu68-common`'s
+`drv_timer` instead of a hand-rolled `CreateMsgPort` / `CreateIORequest` /
+`OpenDevice` / `SendIO` / `CheckIO` / `WaitIO` dance around a MICROHZ timer
+request. Same periodic-tick semantics. No functional change.
+
+### Dependencies
+
+Building now requires **`emu68-pcie-library` 2.3** or later
+(`libraries/pci_irq.h`) and **`emu68-common` 1.9.0** or later (`drv_timer.h`).
+The runtime requirement of `bcmpcie.library` 2.0 is unchanged; nothing above
+touches the interrupt ABI.
+
+---
+
 # Release notes — nvme.device 1.3
 
 Changes since v1.2.
