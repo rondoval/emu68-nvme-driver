@@ -66,6 +66,9 @@ add_executable(nvme.device
     src/nvme/nvme_completion.c
     src/nvme/nvme_scan.c
     mounter/mounter.c
+    mounter/mounter_rdb.c
+    mounter/mounter_cd.c
+    mounter/mounter_legacy.c
     src/device_end.c
 )
 
@@ -75,7 +78,7 @@ target_include_directories(nvme.device
         mounter
 )
 
-# Route the mounter submodule's diagnostics into the debug backend; device.c
+# Route the mounter's diagnostics into the debug backend; device.c
 # provides the mounter_log sink.  The submodule keeps its own switch names, so
 # map them onto our tiers: its printf() carries mount errors (debug tier), its
 # dbg() is per-step tracing (trace tier).  Both compile away below those.
@@ -87,11 +90,6 @@ emu68_tier_at_least(_mounter_trace trace)
 if(_mounter_trace)
     target_compile_definitions(nvme.device PRIVATE MOUNTER_TRACE=1)
 endif()
-
-# Third-party submodule; not -Wconversion-clean under this project's strict
-# warning set.  Bugfixes go to the fork (branch poseidon-fixes).
-set_source_files_properties(mounter/mounter.c PROPERTIES
-    COMPILE_OPTIONS "-Wno-conversion;-Wno-sign-conversion;-Wno-missing-prototypes;-Wno-pointer-sign;-Wno-shadow;-Wno-unused-parameter;-Wno-empty-body")
 
 target_link_libraries(nvme.device
     PRIVATE

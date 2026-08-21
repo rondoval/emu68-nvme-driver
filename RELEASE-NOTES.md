@@ -1,3 +1,42 @@
+# Release notes — nvme.device 1.5
+
+Changes since v1.4.
+
+> Warning: still a young storage driver — keep current backups and use it at
+> your own risk.
+
+---
+
+## Breaking changes
+
+**MBR/GPT partition numbering can shift.** exFAT partitions now mount (below),
+and each takes the next free `NVME<n>:`, so partitions that follow an exFAT one
+may come up under a different number than in 1.4. RDB partitions keep the names
+their RDB carries and are unaffected.
+
+---
+
+## New features
+
+### Automount: exFAT partitions
+
+MBR, GPT and superfloppy disks now mount their **exFAT** filesystems as well as
+FAT and NTFS, through `L:exFATFileSystem` (dostype `FATX`).
+
+`exFATFileSystem` is optional, like the other two handlers: a disk with no
+matching handler in `L:` and no registered dostype is skipped, not mounted dead.
+
+### Boot priority: usable from a Kickstart ROM image
+
+The romtag priority drops from **90 to −43**. Below it is `bootmenu` (−50), which lists
+the volumes this driver mounts; above it is `romboot` (−40), which is what binds
+Emu68's own m68k modules — `devicetree.resource`, `gic400.library`,
+`mailbox.resource`, `68040.library`. At 90 the driver initialised before any of
+those existed, so `bcmpcie.library` found no device tree and no host bridge, and
+NVMe never came up.
+
+---
+
 # Release notes — nvme.device 1.4
 
 Changes since v1.3.

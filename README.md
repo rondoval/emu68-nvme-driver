@@ -88,6 +88,7 @@ driver loads these from `L:` when the dostype is not already registered in `File
 |---|---|
 | `fat95` | `L:` |
 | `NTFileSystem3G` | `L:` |
+| `exFATFileSystem` | `L:` |
 
 `nvme.device` is a local storage driver. It does not require a separate filesystem-specific
 configuration file, but it does depend on the PCIe and interrupt libraries above being installed
@@ -101,10 +102,12 @@ class. Every probed namespace is scanned at init:
 
 - **RDB** partitions mount with the filesystem, handler and DOS name their RDB carries, and boot
   by RDB boot priority. Only a name that collides with an existing device is renamed.
-- **MBR, GPT and superfloppy** disks mount their FAT and NTFS filesystems as `NVME0:`, `NVME1:`, …
-  (collisions bumped), through `fat95` / `NTFileSystem3G`. exFAT and unrecognized boot sectors are
-  skipped. A partition flagged active is registered at boot priority 0, others at -1 — the same
-  rule the RDB path follows.
+- **MBR, GPT and superfloppy** disks mount their FAT, NTFS and exFAT filesystems as `NVME0:`,
+  `NVME1:`, … (collisions bumped), through `fat95` / `NTFileSystem3G` / `exFATFileSystem` — the
+  same three recipes `massstorage.class` uses, so a drive moved between a USB enclosure and an
+  NVMe slot mounts the same way. A filesystem whose handler is not installed is skipped rather
+  than mounted dead. Unrecognized boot sectors are skipped. A partition flagged active is
+  registered at boot priority 0, others at -1 — the same rule the RDB path follows.
 
 The recipes driving the second case — dostype, handler file, DOS name, buffer count, MaxTransfer —
 are `NVME_*` constants in [`nvme.device/include/config.h`](nvme.device/include/config.h), so a build
@@ -126,7 +129,10 @@ can retarget them at a different filesystem.
 - support for namespaces using 512-byte, 1 KiB, 2 KiB, and 4 KiB logical block sizes
 - device-specific quirk handling carried over from Linux where it is relevant to this port
 - Host Memory Buffer setup for DRAM-less controllers that expose HMB capability
-- automount of RDB partitions, plus FAT and NTFS filesystems on MBR/GPT/superfloppy disks
+- automount of RDB partitions, plus FAT, NTFS and exFAT filesystems on MBR/GPT/superfloppy disks
+- ROM-able: no writable data, and a romtag priority (-43) that places the driver in the Kickstart
+  coldstart window between `romboot` and `bootmenu`, so an image built with poseidon-backport's
+  `scripts/build-kickstart.sh` can boot the machine from an NVMe volume
 
 ### Block I/O functionality
 
