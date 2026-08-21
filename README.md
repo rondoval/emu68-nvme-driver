@@ -130,9 +130,7 @@ can retarget them at a different filesystem.
 - device-specific quirk handling carried over from Linux where it is relevant to this port
 - Host Memory Buffer setup for DRAM-less controllers that expose HMB capability
 - automount of RDB partitions, plus FAT, NTFS and exFAT filesystems on MBR/GPT/superfloppy disks
-- ROM-able: no writable data, and a romtag priority (-43) that places the driver in the Kickstart
-  coldstart window between `romboot` and `bootmenu`, so an image built with poseidon-backport's
-  `scripts/build-kickstart.sh` can boot the machine from an NVMe volume
+- can be built into a custom Kickstart ROM , so the machine can boot from an NVMe volume
 
 ### Block I/O functionality
 

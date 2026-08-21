@@ -26,14 +26,14 @@ FAT and NTFS, through `L:exFATFileSystem` (dostype `FATX`).
 `exFATFileSystem` is optional, like the other two handlers: a disk with no
 matching handler in `L:` and no registered dostype is skipped, not mounted dead.
 
-### Boot priority: usable from a Kickstart ROM image
+### Can be built into a custom Kickstart ROM
 
-The romtag priority drops from **90 to −43**. Below it is `bootmenu` (−50), which lists
-the volumes this driver mounts; above it is `romboot` (−40), which is what binds
-Emu68's own m68k modules — `devicetree.resource`, `gic400.library`,
-`mailbox.resource`, `68040.library`. At 90 the driver initialised before any of
-those existed, so `bcmpcie.library` found no device tree and no host bridge, and
-NVMe never came up.
+The driver now probes and mounts its namespaces early enough in the Kickstart
+boot sequence for them to appear in the boot menu, so a ROM image can boot
+the machine from an NVMe drive. Before, the driver came up too early for the
+PCIe library to work and NVMe never appeared at all.
+
+Nothing changes for the normal `DEVS:nvme.device` installation.
 
 ---
 
