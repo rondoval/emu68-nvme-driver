@@ -69,6 +69,7 @@ add_executable(nvme.device
     mounter/mounter_rdb.c
     mounter/mounter_cd.c
     mounter/mounter_legacy.c
+    mounter/bootpoint.c
     src/device_end.c
 )
 

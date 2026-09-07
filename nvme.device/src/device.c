@@ -247,7 +247,8 @@ static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase)
             .unitResults = results,
             .creatorName = (const UBYTE *)DEVICE_NAME,
             .configDev = NULL, /* no autoconfig board; MountDrive() supplies a fake one
-                                  pre-DOS, without which its BootNodes are not bootable */
+                                  pre-DOS, carrying the DiagArea and boot point strap
+                                  needs to boot a node (mounter/bootpoint.c) */
             .SysBase = SysBase,
             /* namespaces report DG_DIRECT_ACCESS, and are independent disks, so one
              * namespace's RDBFF_LAST says nothing about the next */
