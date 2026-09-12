@@ -13,7 +13,11 @@
 struct NVMeController;
 
 #define LIB_MIN_VERSION 39 /* we use memory pools */
-#define DEVICE_PRIORITY 90
+
+/* Below FileSystem.resource (80) and bcmpcie.library (-41) which we open, above the
+ * boot menu (-50) that lists the volumes we mount.
+ */
+#define DEVICE_PRIORITY (-43)
 
 #define COMMAND_PROCESSED 1
 #define COMMAND_SCHEDULED 0

@@ -208,6 +208,19 @@ static const struct MountFS ntfsRecipe = {
     .maxTransfer = NVME_LEGACY_MAXTRANSFER,
 };
 
+/* exFATFileSystem sizes its own cache and ignores de_NumBuffers, de_MaxTransfer
+ * and de_Mask; the values are kept for uniformity with the other two.  Ignoring
+ * de_Mask means its buffers can land unaligned and take the driver's bounce
+ * path — correct, just not zero-copy.  A drive with no exFATFileSystem in L: is
+ * skipped by the mounter's own availability check, exactly as before. */
+static const struct MountFS exfatRecipe = {
+    .dosType = NVME_EXFAT_DOSTYPE,
+    .handler = (const UBYTE *)NVME_EXFAT_HANDLER,
+    .dosName = (const UBYTE *)NVME_LEGACY_DOSNAME,
+    .buffers = NVME_LEGACY_BUFFERS,
+    .maxTransfer = NVME_LEGACY_MAXTRANSFER,
+};
+
 /* Mount every probed namespace: RDB partitions plus MBR/GPT/superfloppy
  * filesystems via the recipes above.  Uses the mounter's explicit
  * {count, unit...} list: unit numbers are contiguous 0..nextUnitNumber-1
@@ -218,39 +231,47 @@ static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase)
     if (count == 0)
         return;
 
-    ULONG *unitList = AllocMem((count + 1) * sizeof(ULONG), MEMF_PUBLIC);
-    if (unitList == NULL)
-        return;
+    /* The mounter takes the unit list as pure input and reports per-unit results
+     * into a separate array, so the two are allocated apart. */
+    ULONG *units = AllocMem(count * sizeof(ULONG), MEMF_PUBLIC);
+    LONG *results = AllocMem(count * sizeof(LONG), MEMF_PUBLIC);
 
-    unitList[0] = count;
-    for (ULONG i = 0; i < count; i++)
-        unitList[i + 1] = i;
+    if (units != NULL && results != NULL) {
+        for (ULONG i = 0; i < count; i++)
+            units[i] = i;
 
-    struct MountStruct ms = {
-        .deviceName = (const UBYTE *)DEVICE_NAME,
-        .unitNum = unitList,
-        .creatorName = (const UBYTE *)DEVICE_NAME,
-        .configDev = NULL, /* fake ConfigDev auto-created if a bootable partition is found */
-        .SysBase = SysBase,
-        .luns = FALSE,
-        .slowSpinup = FALSE,
-        .ignoreLast = TRUE, /* namespaces are independent disks */
-        .hostId = 255,      /* non-SCSI controller */
-        .flags = MSF_NO_CD, /* namespaces report DG_DIRECT_ACCESS */
-        .fatFS = &fatRecipe,
-        .ntfsFS = &ntfsRecipe,
-        .cdFS = NULL,
-        .dmaAlign = DMA_ALIGN_MIN, /* recipe FS buffers never take the bounce path */
-    };
+        struct MountStruct ms = {
+            .deviceName = (const UBYTE *)DEVICE_NAME,
+            .units = units,
+            .unitCount = count,
+            .unitResults = results,
+            .creatorName = (const UBYTE *)DEVICE_NAME,
+            .configDev = NULL, /* no autoconfig board; MountDrive() supplies a fake one
+                                  pre-DOS, carrying the DiagArea and boot point strap
+                                  needs to boot a node (mounter/bootpoint.c) */
+            .SysBase = SysBase,
+            /* namespaces report DG_DIRECT_ACCESS, and are independent disks, so one
+             * namespace's RDBFF_LAST says nothing about the next */
+            .flags = MSF_NO_CD | MSF_IGNORE_LAST,
+            .fs = {
+                [MOUNTFS_FAT]   = &fatRecipe,
+                [MOUNTFS_NTFS]  = &ntfsRecipe,
+                [MOUNTFS_EXFAT] = &exfatRecipe,
+            },
+            .dmaAlign = DMA_ALIGN_MIN, /* recipe FS buffers never take the bounce path */
+        };
 
-    LONG mounted = MountDrive(&ms);
-    (void)mounted; /* only read by Kprintf when the debug backend is on */
-    Kprintf("[nvme] %s: mounted %ld partition(s) on %lu unit(s)\n", __func__, mounted, count);
-    /* MountDrive overwrote the list entries with per-unit results */
-    for (ULONG i = 0; i < count; i++)
-        KprintfT("[nvme] %s: unit %lu: %ld\n", __func__, i, (LONG)unitList[i + 1]);
+        LONG mounted = MountDrive(&ms, NULL);
+        (void)mounted; /* only read by Kprintf when the debug backend is on */
+        Kprintf("[nvme] %s: mounted %ld partition(s) on %lu unit(s)\n", __func__, mounted, count);
+        for (ULONG i = 0; i < count; i++)
+            KprintfT("[nvme] %s: unit %lu: %ld\n", __func__, i, results[i]);
+    }
 
-    FreeMem(unitList, (count + 1) * sizeof(ULONG));
+    if (results != NULL)
+        FreeMem(results, count * sizeof(LONG));
+    if (units != NULL)
+        FreeMem(units, count * sizeof(ULONG));
 }
 
 /* reset_guard prepare callback (interrupt-safe). */

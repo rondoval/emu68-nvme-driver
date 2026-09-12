@@ -81,6 +81,16 @@
 #define NVME_NTFS_HANDLER       "L:NTFileSystem3G"
 #endif
 
+/* Same dostype/handler pair massstorage.class defaults to, so a drive moved
+ * between a USB enclosure and an NVMe slot mounts the same way. */
+#ifndef NVME_EXFAT_DOSTYPE
+#define NVME_EXFAT_DOSTYPE      0x46415458u /* 'FATX' */
+#endif
+
+#ifndef NVME_EXFAT_HANDLER
+#define NVME_EXFAT_HANDLER      "L:exFATFileSystem"
+#endif
+
 /* The mounter ensures a trailing digit and bumps past collisions,
  * so partitions come up as NVME0:, NVME1:, ... */
 #ifndef NVME_LEGACY_DOSNAME
