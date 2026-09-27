@@ -28,6 +28,7 @@ struct nvme_io_context
                                 * in flight (see nvme_io_context_pump) */
     struct IOStdReq *io;   /* originating Amiga request    */
     struct NVMeUnit *unit; /* namespace unit               */
+    struct ExecBase *sysBase; /* the controller's, set at alloc */
     u64 start_lba;         /* LBA of byte 0 of the I/O     */
     u32 total_bytes;       /* == io->io_Length             */
     u32 dispatched;        /* bytes whose child has been submitted */
@@ -98,6 +99,7 @@ struct nvme_request
     struct NVMeUnit *unit;     /* namespace unit; NULL for admin cmds  */
     struct NVMeController *ac; /* owning controller (always set, even
                                 * for admin where unit==NULL)         */
+    struct ExecBase *sysBase;  /* ac->sysBase, set at alloc            */
     struct nvme_queue *q;      /* queue this request lives on; set by
                                 * nvme_req_alloc_io / _alloc_admin    */
 

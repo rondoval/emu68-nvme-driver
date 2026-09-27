@@ -3,7 +3,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -19,6 +19,7 @@
  */
 static inline LONG post_abort_request(struct NVMeUnit *unit, struct IOStdReq *io)
 {
+    struct ExecBase *SysBase = unit->sysBase;
     struct NVMeController *ctrl = unit->ctrl;
     if (!ctrl || !ctrl->metaPool)
         return -1;

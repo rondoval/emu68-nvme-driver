@@ -4,7 +4,7 @@
 #include <clib/timer_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #include <proto/timer.h>
 #endif
@@ -27,6 +27,7 @@
  * the fault; the unit task consumes reset_signal in its Wait() loop. */
 int nvme_reset_ctrl(struct NVMeController *ctrl)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     struct NVMeController *ac = ctrl ? ctrl : NULL;
 
     if (!ac || !ac->unit_task)
@@ -54,6 +55,7 @@ int nvme_reset_ctrl(struct NVMeController *ctrl)
  */
 static void nvme_drain_msgport(struct NVMeController *ctrl)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (test_bit(NVME_CTRL_STOPPED, &ctrl->flags) ||
         test_bit(NVME_CTRL_FROZEN, &ctrl->flags))
         return;
@@ -121,6 +123,7 @@ static void nvme_drain_msgport(struct NVMeController *ctrl)
  */
 void UnitTask(struct NVMeController *ctrl, struct Task *parent)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     /* Retry queue used by nvme_retry_req for CRDT-deferred resubmits */
     _NewMinList(&ctrl->retry_list);
     /* Back-pressure FIFO for I/O the full I/O queue can't accept yet */
@@ -150,7 +153,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
 
     // Create a watchdog timer to check for command timeouts
     struct drv_timer tick;
-    if (!drv_timer_open(&tick))
+    if (!drv_timer_open(&tick, SysBase))
     {
         Kprintf("[nvme] %s: failed to open timer.device\n", __func__);
         goto free_reset_signal;
@@ -175,7 +178,18 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
 
         if (sigset & (1UL << ctrl->irq_signal))
         {
-            nvme_process_completions(ctrl);
+#ifdef PROFILE
+            if (ctrl->irq_stamp != 0)
+            {
+                PERF_ADD(&ctrl->perf, NP_WAKE, ctrl->irq_stamp);
+                ctrl->irq_stamp = 0;
+            }
+#endif
+            PERF_T0(t_drain);
+            u32 cqes = nvme_process_completions(ctrl);
+            PERF_ADD(&ctrl->perf, NP_DRAIN, t_drain);
+            PERF_HIST_ADD(&ctrl->cqe_per_wake, cqes);
+            (void)cqes; /* only the histogram reads it */
             nvme_int_rearm(ctrl);
         }
 
@@ -193,6 +207,14 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
             drv_timer_consume(&tick);
 
             nvme_tick_watchdog(ctrl);
+#ifdef PROFILE
+            if (++ctrl->perf_ticks >= 2000 / UNIT_TASK_POLL_DELAY_MS)
+            {
+                ctrl->perf_ticks = 0;
+                perf_report(&ctrl->perf);
+                perf_hist_report(&ctrl->cqe_per_wake);
+            }
+#endif
 
             drv_timer_arm_ms(&tick, UNIT_TASK_POLL_DELAY_MS);
         }
@@ -246,9 +268,9 @@ free_msg_port:
     /* drv_task_exit clears the liveness slot first (drv_task_join polls it),
      * then reports CTRL_F for a task that ran / CTRL_C for one that never got
      * to its loop. */
-    drv_task_exit(&ctrl->unit_task, parent, ctrl->unit_task != NULL);
+    drv_task_exit(SysBase, &ctrl->unit_task, parent, ctrl->unit_task != NULL);
     return;
 
 fail:
-    drv_task_exit(&ctrl->unit_task, parent, FALSE);
+    drv_task_exit(SysBase, &ctrl->unit_task, parent, FALSE);
 }

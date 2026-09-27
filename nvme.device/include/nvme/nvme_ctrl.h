@@ -5,6 +5,19 @@
 #include <nvme/nvme_core.h>	 /* foundation types, nvme_defs.h (enum nvme_ctrl_type, NVME_CC_*) */
 #include <nvme/nvme_queue.h> /* struct nvme_queue embedded in NVMeController */
 #include <dma_mem.h>		 /* struct dma_mem_ctx, region DMA pool */
+#include <perf.h>		 /* [nvme] datapath timing (PERF_T0/PERF_ADD, struct perf) */
+
+/* Datapath perf slots (emu68-common <perf.h>), reported as [nvme] every ~2 s
+ * from the unit task's watchdog tick.  Order must match nvme_perf_names[] in
+ * nvme_probe.c. */
+enum NVMeProfSlot
+{
+	NP_SUBMIT, /* nvme_submit_io: SQE copy + clean (+ doorbell when unbatched) */
+	NP_DRAIN,  /* interrupt-driven I/O-CQ drain, completions and replies included */
+	NP_WAKE,   /* interrupt -> the unit task starts that drain */
+	NP_SLOT_COUNT
+};
+#define NVME_CQE_PER_WAKE_BOUNDS 7 /* completions one interrupt finds */
 
 /* Device/unit framework types live in device.h; referenced here by pointer. */
 struct NVMeDevice;
@@ -262,6 +275,7 @@ struct NVMeController
 	/* Controller identity and owner linkage. */
 	struct MinNode node; /* Link node in NVMeDevice.controllers; must stay first. */
 	struct NVMeDevice *device; /* Owning device base shared by all controllers. */
+	struct ExecBase *sysBase; /* device->sysBase, copied at probe (one hop for every ctrl path). */
 	struct Library *utilityBase; /* Cached Utility library pointer for helper calls. */
 
 	/* PCIe attachment and interrupt plumbing. */
@@ -358,6 +372,14 @@ struct NVMeController
 	/* Software policy and quirk flags. */
 	unsigned long quirks; /* Quirk bits affecting transport and command behaviour. */
 	unsigned long flags; /* Internal controller runtime flags. */
+
+	/* Datapath timing: written under PROFILE only, storage in every tier. */
+	struct perf_counter perf_slots[NP_SLOT_COUNT];
+	struct perf perf;
+	u32 cqe_per_wake_buckets[NVME_CQE_PER_WAKE_BOUNDS + 1];
+	struct perf_hist cqe_per_wake;
+	u32 irq_stamp;  /* ISR's get_time() | 1 for NP_WAKE; 0 = none pending */
+	u32 perf_ticks; /* watchdog ticks since the last report */
 };
 
 /* ------------------------------------------------------------------ */
@@ -430,7 +452,7 @@ static inline BOOL nvme_state_terminal(struct NVMeController *ctrl)
 	case NVME_CTRL_DEAD:
 		return TRUE;
 	default:
-		Kprintf("[nvme] %s: Unhandled ctrl state:%d\n", __func__, nvme_ctrl_state(ctrl));
+		Kprintf("[nvme] %s: Unhandled ctrl state:%ld\n", __func__, nvme_ctrl_state(ctrl));
 		return TRUE;
 	}
 }

@@ -4,7 +4,7 @@
 #include <clib/bcmpcie_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function: see NVMeDevice.sysBase */
 #include <proto/exec.h>
 #define BCMPCIE_BASE_NAME pcielibBase
 #include <proto/bcmpcie.h>
@@ -36,8 +36,11 @@ static ULONG nvme_int_isr(struct ExecBase *execBase asm("a6"),
                           struct NVMeController *ctrl asm("a1"),
                           ULONG vector asm("d0"))
 {
-    (void)execBase;
     (void)vector;
+
+#ifdef PROFILE
+    ctrl->irq_stamp = get_time() | 1; /* 0 means "no stamp" */
+#endif
 
     if (likely(ctrl->msi_enabled))
     {

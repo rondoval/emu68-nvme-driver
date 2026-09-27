@@ -10,7 +10,7 @@
 #include <clib/timer_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #include <proto/timer.h>
 #endif
@@ -34,7 +34,7 @@
  */
 #define AMIGA_TO_UNIX_EPOCH_SEC  252460800LL
 
-s64 nvme_unix_time_ms(void)
+s64 nvme_unix_time_ms(struct ExecBase *SysBase)
 {
 	struct MsgPort *port = CreateMsgPort();
 	if (!port)

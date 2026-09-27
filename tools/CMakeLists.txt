@@ -70,8 +70,7 @@ target_include_directories(nvmeinfo PRIVATE
     ${CMAKE_SOURCE_DIR}/bcmpcie.library/include
 )
 
-# Hosted CLI programs: for the serial backend, link debug.lib (KPrintF). libc
-# supplies __divsi3, so no glue and no ROM check.
+# Hosted CLI programs: not ROMABLE, so no ROM check.
 emu68_debug_backend_finalize(nvmeinfo)
 emu68_debug_backend_finalize(nvmeadm)
 

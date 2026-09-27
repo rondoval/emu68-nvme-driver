@@ -3,7 +3,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -86,7 +86,7 @@ static void copy_trimmed(char *dst, const char *src, ULONG src_len)
     ULONG len = src_len;
     while (len > 0 && (src[len - 1] == ' ' || src[len - 1] == '\0'))
         len--;
-    CopyMem((APTR)src, dst, len);
+    memcpy(dst, src, len);
     dst[len] = '\0';
 }
 
@@ -208,8 +208,9 @@ static inline BOOL nvme_cmd_is_etd(UWORD cmd)
  * immediately (synchronous / quick reply).  All data-transfer commands
  * are queued to the unit task for asynchronous processing.
  */
-void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6") __attribute__((unused)))
+void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6"))
 {
+    struct ExecBase *SysBase = base->sysBase;
     struct NVMeUnit *unit = (struct NVMeUnit *)io->io_Unit;
     BOOL queue = FALSE;
 

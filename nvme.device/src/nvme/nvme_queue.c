@@ -19,7 +19,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -58,6 +58,7 @@
  */
 static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u16 qid, u16 depth)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     /* SQE stride: 64 B normally; 128 B on the I/O queue when
      * NVME_QUIRK_128_BYTES_SQES is set (some Apple controllers require a
      * non-standard stride and ignore CC.IOSQES).  Admin (qid 0) is always 64. */
@@ -73,6 +74,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
 
     memset(q, 0, sizeof(*q));
     q->ctrl = ctrl;
+    q->sysBase = ctrl->sysBase;
     q->qid = qid;
     q->depth = depth;
     q->sqe_128b = sqe_128b;
@@ -144,6 +146,7 @@ fail_sq:
  */
 void nvme_teardown_queue(struct nvme_queue *q)
 {
+    struct ExecBase *SysBase = q->sysBase;
     KprintfT("[nvme] teardown_queue: q=%lx qid=%lu sq=%lx cq=%lx inflight=%lx\n",
              (ULONG)q, (ULONG)q->qid,
              (ULONG)q->sq, (ULONG)q->cq, (ULONG)q->inflight);
@@ -173,6 +176,7 @@ void nvme_teardown_queue(struct nvme_queue *q)
  */
 static void drain_cq(struct nvme_queue *q)
 {
+    struct ExecBase *SysBase = q->sysBase;
     u16 head = q->cq_head;
     u16 phase = q->cq_phase;
     int drained = 0;
@@ -309,6 +313,7 @@ void nvme_process_completions(struct NVMeController *ctrl)
  */
 static void nvme_watchdog_escalate(struct NVMeController *ctrl, struct nvme_queue *q)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE)
         Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
     else
@@ -397,6 +402,7 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
  */
 void nvme_tick_watchdog(struct NVMeController *ctrl)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     /* Reap any CQEs the controller posted without (or before) an MSI: the
      * completion was DMA-written to host memory regardless of whether the
      * interrupt was delivered, so a missing/late MSI must not strand it
@@ -820,6 +826,7 @@ void nvme_unfreeze(struct NVMeController *ctrl)
 {
     if (!ctrl)
         return;
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (!test_and_clear_bit(NVME_CTRL_FROZEN, &ctrl->flags))
         return;
     Kprintf("[nvme] %s: I/O queues unfrozen\n", __func__);
@@ -860,6 +867,7 @@ void nvme_unquiesce_io_queues(struct NVMeController *ctrl)
 {
     if (!ctrl)
         return;
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (!test_and_clear_bit(NVME_CTRL_STOPPED, &ctrl->flags))
         return;
     Kprintf("[nvme] %s: I/O queues unquiesced\n", __func__);
@@ -899,6 +907,7 @@ void nvme_unquiesce_admin_queue(struct NVMeController *ctrl)
 {
     if (!ctrl)
         return;
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (!test_and_clear_bit(NVME_CTRL_ADMIN_Q_STOPPED, &ctrl->flags))
         return;
     Kprintf("[nvme] %s: admin queue unquiesced\n", __func__);

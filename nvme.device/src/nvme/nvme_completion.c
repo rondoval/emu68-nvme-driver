@@ -7,6 +7,7 @@
  * (reply io / signal waiter / fire async done), and the complete_rq
  * conductor.
  */
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <nvme/nvme_core.h>
 #include <nvme/nvme_ctrl.h> /* struct NVMeController */
 #include <device.h>			/* struct NVMeUnit (req->unit) */
@@ -193,6 +194,7 @@ static void nvme_retry_req(struct nvme_request *req)
 {
 	u16 crd = (req->status & NVME_STATUS_CRD) >> 11;
 	struct NVMeController *ac = req->ac;
+	struct ExecBase *SysBase = req->sysBase;
 
 	req->status = 0;
 	req->retries++;
@@ -249,6 +251,7 @@ static inline void nvme_log_error(struct nvme_request *req)
  */
 static void nvme_end_req(struct nvme_request *req)
 {
+	struct ExecBase *SysBase = req->sysBase;
 	BYTE error = nvme_error_status(req->status);
 
 	KprintfT("[nvme] end_req: req=%lx cid=0x%lx status=0x%lx (%s) error=%ld done=%lx waiter=%lx io=%lx\n",

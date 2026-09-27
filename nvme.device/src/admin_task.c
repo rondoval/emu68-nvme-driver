@@ -25,7 +25,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -42,13 +42,19 @@
 void nvme_queue_scan(struct NVMeController *ctrl)
 {
     if (ctrl && ctrl->admin_task)
+    {
+        struct ExecBase *SysBase = ctrl->sysBase;
         Signal(ctrl->admin_task, 1UL << ctrl->scan_signal);
+    }
 }
 
 void nvme_queue_fw_act_work(struct NVMeController *ctrl)
 {
     if (ctrl && ctrl->admin_task)
+    {
+        struct ExecBase *SysBase = ctrl->sysBase;
         Signal(ctrl->admin_task, 1UL << ctrl->fw_act_signal);
+    }
 }
 
 /*
@@ -58,10 +64,11 @@ void nvme_queue_fw_act_work(struct NVMeController *ctrl)
  * runs a Wait() loop dispatching by signal mask.  Exits on CTRL_C from
  * drv_task_join, clearing ctrl->admin_task so the joiner can poll.
  *
- * Spawned via drv_task_spawn(ctrl, AdminWorker, ...) at probe time.
+ * Spawned via drv_task_spawn(SysBase, ctrl, AdminWorker, ...) at probe time.
  */
 void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     KprintfT("[nvme] AdminWorker: ctrl=%lx parent=%lx\n",
              (ULONG)ctrl, (ULONG)parent);
 

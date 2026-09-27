@@ -126,7 +126,7 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
 		}
 		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
 			return NVME_NIDT_EUI64_LEN;
-		CopyMem(data + sizeof(*cur), ids->eui64, NVME_NIDT_EUI64_LEN);
+		memcpy(ids->eui64, data + sizeof(*cur), NVME_NIDT_EUI64_LEN);
 		return NVME_NIDT_EUI64_LEN;
 	case NVME_NIDT_NGUID:
 		if (cur->nidl != NVME_NIDT_NGUID_LEN)
@@ -137,7 +137,7 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
 		}
 		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
 			return NVME_NIDT_NGUID_LEN;
-		CopyMem(data + sizeof(*cur), ids->nguid, NVME_NIDT_NGUID_LEN);
+		memcpy(ids->nguid, data + sizeof(*cur), NVME_NIDT_NGUID_LEN);
 		return NVME_NIDT_NGUID_LEN;
 	case NVME_NIDT_UUID:
 		if (cur->nidl != NVME_NIDT_UUID_LEN)
@@ -148,7 +148,7 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
 		}
 		if (ctrl->quirks & NVME_QUIRK_BOGUS_NID)
 			return NVME_NIDT_UUID_LEN;
-		CopyMem(data + sizeof(*cur), &ids->uuid, NVME_NIDT_UUID_LEN);
+		memcpy(&ids->uuid, data + sizeof(*cur), NVME_NIDT_UUID_LEN);
 		return NVME_NIDT_UUID_LEN;
 	case NVME_NIDT_CSI:
 		if (cur->nidl != NVME_NIDT_CSI_LEN)
@@ -157,7 +157,7 @@ static int nvme_process_ns_desc(struct NVMeController *ctrl, struct nvme_ns_ids 
 					__func__, warn_str, cur->nidl);
 			return -1;
 		}
-		CopyMem(data + sizeof(*cur), &ids->csi, NVME_NIDT_CSI_LEN);
+		memcpy(&ids->csi, data + sizeof(*cur), NVME_NIDT_CSI_LEN);
 		*csi_seen = TRUE;
 		return NVME_NIDT_CSI_LEN;
 	default:
@@ -350,10 +350,10 @@ static int nvme_ns_info_from_identify(struct NVMeController *ctrl,
 
 		if (ctrl->vs >= NVME_VS(1, 1, 0) &&
 			!memchr_inv(ids->eui64, 0, sizeof(ids->eui64)))
-			CopyMem(id->eui64, ids->eui64, sizeof(ids->eui64));
+			memcpy(ids->eui64, id->eui64, sizeof(ids->eui64));
 		if (ctrl->vs >= NVME_VS(1, 2, 0) &&
 			!memchr_inv(ids->nguid, 0, sizeof(ids->nguid)))
-			CopyMem(id->nguid, ids->nguid, sizeof(ids->nguid));
+			memcpy(ids->nguid, id->nguid, sizeof(ids->nguid));
 	}
 
 	if (ctrl->ctratt & NVME_CTRL_ATTR_ELBAS)

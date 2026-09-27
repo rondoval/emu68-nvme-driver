@@ -16,20 +16,22 @@
 
 #define USEC_PER_SEC 1000000UL
 
-/* Pre-DMA cache maintenance (inline LINE-F ops via cache_ops.h).  @to_device
+/* The three wrappers below are macros, not inline functions, for the same
+ * reason cache_pre_dma/cache_post_dma are in the LVO flavour: the exec call
+ * must expand in the caller, where EXEC_BASE_NAME may be a local SysBase.
+ *
+ * Pre-DMA cache maintenance (inline LINE-F ops via cache_ops.h).  @to_device
  * selects the memory->device direction (DMA_ReadFromRAM): the device will
  * READ this buffer (NVMe write, SQE, PRP list), so a clean is enough and the
  * lines stay valid.  When clear the device will WRITE the buffer (NVMe read),
  * so it is clean+invalidated. */
-static inline void nvme_cache_flush(void *addr, ULONG len, BOOL to_device)
-{
-	cache_pre_dma((APTR)addr, len, to_device ? DMA_ReadFromRAM : 0);
-}
+#define nvme_cache_flush(addr, len, to_device) \
+	cache_pre_dma((APTR)(addr), (len), (to_device) ? DMA_ReadFromRAM : 0)
 
-/* NoSync variant: defers the batch's closing barrier to a later non-NoSync op.
- * In this driver that closer is ALWAYS the SQE flush in nvme_submit_io — the
- * unconditional last clean before any doorbell (immediate or batched), so PRP
- * and data flushes for the same command may all ride NoSync. See cache_ops.h.
+/* NoSync variant: defers the batch's closing barrier.  In this driver that
+ * closer is ALWAYS the emu68_barrier() in nvme_sq_commit, right before the
+ * SQ-tail doorbell (immediate or batched), so the SQE, PRP and data ops of
+ * every command in the batch all ride NoSync. See cache_ops.h pattern 2.
  *
  * Unlike nvme_cache_flush, the read direction here is DMA_WriteToRAM — an
  * INVALIDATE, discarding dirty destination lines instead of writing them back
@@ -38,18 +40,13 @@ static inline void nvme_cache_flush(void *addr, ULONG len, BOOL to_device)
  * (nvme_setup_rw and the multi-chunk precache): read destinations the device
  * fully overwrites, whole-line by the nvme_needs_bounce gate.  Init, admin
  * and any bidirectional buffer must keep using nvme_cache_flush. */
-static inline void nvme_cache_flush_ns(void *addr, ULONG len, BOOL to_device)
-{
-	cache_pre_dma((APTR)addr, len,
-	              (to_device ? DMA_ReadFromRAM : DMA_WriteToRAM) | DMAF_NoSync);
-}
+#define nvme_cache_flush_ns(addr, len, to_device) \
+	cache_pre_dma((APTR)(addr), (len), \
+	              ((to_device) ? DMA_ReadFromRAM : DMA_WriteToRAM) | DMAF_NoSync)
 
 /* Post-DMA: invalidate stale CPU lines after the device wrote @addr (NVMe read,
  * CQE).  Not needed after a device read (the library would no-op it anyway). */
-static inline void nvme_cache_inval(void *addr, ULONG len)
-{
-	cache_post_dma((APTR)addr, len, 0);
-}
+#define nvme_cache_inval(addr, len) cache_post_dma((APTR)(addr), (len), 0)
 
 /* ---- bitops (uniprocessor) --------------------------------------- */
 static inline int test_bit(unsigned bit, const volatile unsigned long *addr)
@@ -113,7 +110,7 @@ static inline int check_shl_overflow(u32 value, u32 shift, u32 *result)
 
 /* Wall-clock helper for NVMe's Timestamp feature payload.
  * Returns Unix-epoch milliseconds. */
-s64 nvme_unix_time_ms(void);
+s64 nvme_unix_time_ms(struct ExecBase *SysBase);
 
 /* ---- misc -------------------------------------------------------- */
 #define ARRAY_SIZE(a) (sizeof(a) / sizeof((a)[0]))

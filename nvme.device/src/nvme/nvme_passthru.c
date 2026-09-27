@@ -41,7 +41,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -138,7 +138,7 @@ static void nvme_passthru_end(struct NVMeController *ctrl, u32 effects)
         nvme_queue_scan(ctrl);
 }
 
-static inline void reply_passthru(struct IOStdReq *io, BYTE error)
+static inline void reply_passthru(struct ExecBase *SysBase, struct IOStdReq *io, BYTE error)
 {
     io->io_Error = error;
     ReplyMsg((struct Message *)io);
@@ -146,6 +146,7 @@ static inline void reply_passthru(struct IOStdReq *io, BYTE error)
 
 void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     struct NVMePassthruCmd *uc = (struct NVMePassthruCmd *)io->io_Data;
 
     KprintfT("[nvme] passthru: cmd=0x%04lx opcode=0x%02lx (%s) nsid=%lu data_len=%lu\n",
@@ -165,7 +166,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
         KprintfT("[nvme] passthru: ctrl not LIVE (state=%ld) — rejecting %s\n",
                  (LONG)state, terminal ? "terminally" : "transiently");
 #endif
-        reply_passthru(io, IOERR_UNITBUSY);
+        reply_passthru(SysBase, io, IOERR_UNITBUSY);
         return;
     }
 
@@ -176,7 +177,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     if (is_io)
     {
         Kprintf("[nvme] passthru: NSCMD_NVME_IO_PASS not yet supported\n");
-        reply_passthru(io, IOERR_NOCMD);
+        reply_passthru(SysBase, io, IOERR_NOCMD);
         return;
     }
 
@@ -184,7 +185,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     if (uc->pt_Metadata || uc->pt_MetadataLen)
     {
         Kprintf("[nvme] passthru: metadata buffers not supported\n");
-        reply_passthru(io, IOERR_BADLENGTH);
+        reply_passthru(SysBase, io, IOERR_BADLENGTH);
         return;
     }
 
@@ -197,7 +198,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     {
         Kprintf("[nvme] passthru: data_len %lu exceeds 1 MiB cap\n",
                 (ULONG)uc->pt_DataLen);
-        reply_passthru(io, IOERR_BADLENGTH);
+        reply_passthru(SysBase, io, IOERR_BADLENGTH);
         return;
     }
 
@@ -218,10 +219,10 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
         {
             Kprintf("[nvme] passthru: bounce alloc (%lu B) failed\n",
                     (ULONG)uc->pt_DataLen);
-            reply_passthru(io, IOERR_BADADDRESS);
+            reply_passthru(SysBase, io, IOERR_BADADDRESS);
             return;
         }
-        CopyMem(uc->pt_Addr, bounce, uc->pt_DataLen);
+        memcpy(bounce, uc->pt_Addr, uc->pt_DataLen);
         dma_buf = bounce;
         KprintfT("[nvme] passthru: bounce=%lx (user=%lx, %lu B)\n",
                  (ULONG)bounce, (ULONG)uc->pt_Addr, (ULONG)uc->pt_DataLen);
@@ -263,7 +264,7 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
      * always copy back if a bounce was used. */
     if (bounce)
     {
-        CopyMem(bounce, uc->pt_Addr, uc->pt_DataLen);
+        memcpy(uc->pt_Addr, bounce, uc->pt_DataLen);
         dma_free(ctrl->dmaPool, bounce);
     }
 
@@ -274,12 +275,12 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     if (status < 0)
     {
         Kprintf("[nvme] passthru: submit_sync_cmd errno %ld\n", (LONG)status);
-        reply_passthru(io, IOERR_BADADDRESS);
+        reply_passthru(SysBase, io, IOERR_BADADDRESS);
         return;
     }
 
     io->io_Actual = uc->pt_DataLen;
     KprintfT("[nvme] passthru: done status=0x%lx (%s) result=0x%08lx\n",
              (ULONG)status, nvme_get_error_status_str((u16)status), (ULONG)uc->pt_Result);
-    reply_passthru(io, (BYTE)(status & 0xff));
+    reply_passthru(SysBase, io, (BYTE)(status & 0xff));
 }

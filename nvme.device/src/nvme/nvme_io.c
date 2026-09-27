@@ -19,7 +19,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -62,6 +62,7 @@
  */
 static int build_prps(struct nvme_request *req, void *buffer, u32 bytes)
 {
+    struct ExecBase *SysBase = req->sysBase;
     const u64 buf_addr = (u64)(ULONG)buffer;
     const u32 first = (u32)(NVME_CTRL_PAGE_SIZE - (buf_addr & (NVME_CTRL_PAGE_SIZE - 1)));
 
@@ -187,6 +188,7 @@ free_lists:
 static int nvme_setup_dsm(struct nvme_request *req, struct nvme_dsm_range *ranges,
                           u16 nr)
 {
+    struct ExecBase *SysBase = req->sysBase;
     KprintfT("[nvme] setup_dsm: req=%lx nsid=%lu nr=%lu\n",
              (ULONG)req,
              (ULONG)(req->unit ? req->unit->nsid : 0),
@@ -301,6 +303,7 @@ static inline u32 nvme_rw_chunk_cap(struct NVMeController *ctrl, u8 shift, u64 l
 static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
                           u8 opcode, void *buffer)
 {
+    struct ExecBase *SysBase = req->sysBase;
     const u32 bytes = count << (req->unit ? req->unit->blockShift : 9);
 
     KprintfT("[nvme] setup_rw: opcode=0x%02lx (%s) nsid=%lu lba=0x%08lx%08lx count=%lu bytes=%lu buf=%lx\n",
@@ -331,7 +334,7 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
         }
         req->bounce_buf = b;
         if (opcode == nvme_cmd_write)
-            CopyMem(buffer, b, bytes);
+            memcpy(b, buffer, bytes);
         dma_buf = b;
     }
 
@@ -431,6 +434,7 @@ static void nvme_req_free_dma_buffers(struct nvme_request *req)
  */
 void nvme_cleanup_cmd(struct nvme_request *req)
 {
+    struct ExecBase *SysBase = req->sysBase;
     /* Read path post-DMA cache work, before the bounce is freed.
      * The device wrote into whichever buffer DMA actually used
      * (the bounce if there is one, else user_buf directly). */
@@ -440,7 +444,7 @@ void nvme_cleanup_cmd(struct nvme_request *req)
         if (req->bounce_buf)
         {
             nvme_cache_inval(req->bounce_buf, req->user_len);
-            CopyMem(req->bounce_buf, req->user_buf, req->user_len);
+            memcpy(req->user_buf, req->bounce_buf, req->user_len);
         }
         else if (!(req->ctx && req->ctx->data_precached))
         {
@@ -505,6 +509,7 @@ static struct nvme_request *nvme_req_alloc_io(struct NVMeUnit *unit,
     req->io = io;
     req->unit = unit;
     req->ac = ctrl;
+    req->sysBase = ctrl->sysBase;
     req->q = q;
     req->cid = cid;
     nvme_inflight_claim(q, cid, req);
@@ -565,7 +570,9 @@ void nvme_sq_batch_end(struct nvme_queue *q)
  */
 BYTE nvme_submit_io(struct nvme_request *req)
 {
+    struct ExecBase *SysBase = req->sysBase;
     struct nvme_queue *q = req->q;
+    PERF_T0(t_submit);
 
     if (!q->sq)
     {
@@ -596,7 +603,7 @@ BYTE nvme_submit_io(struct nvme_request *req)
     /* Copy the command into the SQE.  NVMe commands are little-endian
      * on the wire; the fields we wrote into req->cmd are already in
      * little-endian via cpu_to_leXX, so plain memcpy is correct. */
-    CopyMem(&req->cmd, slot, sizeof(req->cmd));
+    memcpy(slot, &req->cmd, sizeof(req->cmd));
 
     /* Cache flush: device DMA-reads this SQE from DRAM.  Without
      * CachePreDMA the device may see stale cache lines and read garbage. */
@@ -623,6 +630,7 @@ BYTE nvme_submit_io(struct nvme_request *req)
     if (q->sq_batch_depth == 0)
         nvme_sq_commit(q);
 
+    PERF_ADD(&q->ctrl->perf, NP_SUBMIT, t_submit);
     return NVME_IO_ASYNC;
 }
 
@@ -738,6 +746,7 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
 {
     struct NVMeUnit *unit = ctx->unit;
     struct NVMeController *ctrl = unit->ctrl;
+    struct ExecBase *SysBase = ctx->sysBase;
     const u8 shift = (u8)unit->blockShift;
     const BOOL is_wz = (ctx->opcode == nvme_cmd_write_zeroes);
     /* Cap siblings per request at the queue's in-flight limit (1 under
@@ -844,6 +853,7 @@ BYTE nvme_io_context_pump(struct nvme_io_context *ctx)
 void nvme_io_context_finish(struct nvme_io_context *ctx)
 {
     struct NVMeController *ctrl = ctx->unit->ctrl;
+    struct ExecBase *SysBase = ctx->sysBase;
     struct IOStdReq *io = ctx->io;
     BYTE err = ctx->first_error;
 
@@ -891,6 +901,7 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
                        u64 lba, ULONG blocks, u8 opcode, void *buffer)
 {
     struct NVMeController *ctrl = unit->ctrl;
+    struct ExecBase *SysBase = unit->sysBase;
     const ULONG bytes = blocks << unit->blockShift;
     /* MDTS ceiling, further reduced to the next stripe boundary under
      * NVME_QUIRK_STRIPE_SIZE.  A transfer that fits within one cap from its
@@ -953,6 +964,7 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
 
     ctx->io = io;
     ctx->unit = unit;
+    ctx->sysBase = ctrl->sysBase;
     ctx->start_lba = lba;
     ctx->total_bytes = (u32)bytes;
     ctx->opcode = opcode;
@@ -1075,6 +1087,7 @@ BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
         return IOERR_SELFTEST;
     ctx->io = io;
     ctx->unit = unit;
+    ctx->sysBase = ctrl->sysBase;
     ctx->start_lba = lba;
     ctx->total_bytes = (u32)bytes;
     ctx->opcode = nvme_cmd_write_zeroes;

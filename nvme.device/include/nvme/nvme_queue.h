@@ -24,6 +24,7 @@ struct nvme_request;
 struct nvme_queue
 {
     struct NVMeController  *ctrl;       /* back-pointer to owning controller */
+    struct ExecBase        *sysBase;    /* ctrl->sysBase, copied at setup     */
     u16                     qid;        /* 0 = admin, 1 = I/O                */
     u16                     depth;      /* number of ring slots              */
     BOOL                    sqe_128b;   /* TRUE when this queue uses 128-byte

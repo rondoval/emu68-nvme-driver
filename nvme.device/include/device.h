@@ -51,6 +51,7 @@ struct NVMeDevice
 {
     struct Device device;
     ULONG segList;
+    struct ExecBase *sysBase;
     struct Library *utilityBase;
     struct Library *pcieBase;
     struct reset_guard resetGuard; /* pre-reset DMA quiesce + SHN hooks */
@@ -71,6 +72,7 @@ struct NVMeUnit
 {
     struct Unit unit;            /* MUST be first: mp_Node.ln_Succ/Pred = MinList links */
     struct NVMeController *ctrl; /* owning controller */
+    struct ExecBase *sysBase;    /* the controller's, copied at unit creation */
     struct NVMeDevice *device;
 
     LONG unitNumber; /* global, 0-based */

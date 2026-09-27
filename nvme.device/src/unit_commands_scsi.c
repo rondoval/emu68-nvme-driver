@@ -14,7 +14,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -267,7 +267,7 @@ static inline void scsi_emit(struct SCSICmd *cmd, const void *src, ULONG len, UL
         len = cmd->scsi_Length;
 
     if (len)
-        CopyMem((CONST_APTR)src, cmd->scsi_Data, len);
+        memcpy(cmd->scsi_Data, src, len);
     cmd->scsi_Actual = len;
 }
 
@@ -329,7 +329,7 @@ static BYTE scsi_inquiry_standard(struct NVMeUnit *unit,
     /* Vendor is always "NVMe    " (8 bytes) — the NVMe spec doesn't
      * carry a separate vendor field, just a 40-byte model that
      * usually starts with the maker. */
-    CopyMem((CONST_APTR) "NVMe    ", (APTR)data.vendor, 8);
+    memcpy(data.vendor, "NVMe    ", 8);
 
     if (have_id)
     {
@@ -342,9 +342,9 @@ static BYTE scsi_inquiry_standard(struct NVMeUnit *unit,
     }
     else
     {
-        CopyMem((CONST_APTR) "Storage Device  ", (APTR)data.product, 16);
-        CopyMem((CONST_APTR) "0001", (APTR)data.revision, 4);
-        CopyMem((CONST_APTR) "        ", (APTR)data.serial, 8);
+        memcpy(data.product, "Storage Device  ", 16);
+        memcpy(data.revision, "0001", 4);
+        memcpy(data.serial, "        ", 8);
     }
 
     scsi_emit(cmd, &data, sizeof(data), alloc);

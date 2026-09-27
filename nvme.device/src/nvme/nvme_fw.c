@@ -51,6 +51,7 @@ static BOOL nvme_ctrl_pp_status(struct NVMeController *ctrl)
  */
 static void fw_slot_info_done(struct nvme_request *req)
 {
+	struct ExecBase *SysBase = req->sysBase;
 	struct NVMeController *nc = req->ac;
 	struct nvme_fw_slot_info_log *log = req->priv;
 
@@ -76,9 +77,7 @@ static void fw_slot_info_done(struct nvme_request *req)
 
 	/* frs[] entries are 8-byte space-padded firmware revision strings,
 	 * matching id_strings.firmware; refresh it to the active slot. */
-	CopyMem((CONST_APTR)&log->frs[cur_fw_slot - 1],
-			(APTR)nc->id_strings.firmware,
-			sizeof(nc->id_strings.firmware));
+	memcpy(nc->id_strings.firmware, &log->frs[cur_fw_slot - 1], sizeof(nc->id_strings.firmware));
 
 out:
 	if (log)
