@@ -28,13 +28,17 @@
  *   - MSI/MSI-X mask the vector at the root complex (MaskIntVector: a local
  *     register write; a message arriving while masked fires on unmask).  The
  *     NVMe INTMS/INTMC registers are not touched: the spec forbids host
- *     access to them in MSI-X mode.  A controller that has gone away sends
- *     no messages, so the CSTS probe INTx keeps (below) is not needed.
+ *     access to them in MSI-X mode.  A vector is ours alone, so there is
+ *     nothing to check before claiming the interrupt.
  *   - INTx is level-triggered: it masks at the controller (INTMS), which
  *     deasserts the pin.  (MaskIntVector on INTx is a config-space access and
- *     not allowed from an interrupt server.)  The all-ones CSTS probe catches
- *     a controller that has gone away, where there is nothing to mask or
- *     drain.
+ *     not allowed from an interrupt server.)  An INTx line can be shared with
+ *     another function, so this path first asks whether the interrupt is ours
+ *     at all and reports not-handled if it is not, leaving the rest of the
+ *     chain to run.  NVMe has no interrupt-status register; the pin is
+ *     asserted only while a completion queue holds entries we have not
+ *     consumed, so a fresh CQE on either queue is the test.  It also covers
+ *     the controller that has gone away: no CQEs, nothing to mask or drain.
  */
 static ULONG nvme_int_isr(struct ExecBase *SysBase asm("a6"),
                           struct NVMeController *ctrl asm("a1"),
@@ -54,9 +58,8 @@ static ULONG nvme_int_isr(struct ExecBase *SysBase asm("a6"),
         return 1;
     }
 
-    ULONG csts = mmio_read32((volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_CSTS));
-    if (csts == 0xFFFFFFFFUL)
-        return 0;
+    if (!nvme_cq_pending(&ctrl->io_q) && !nvme_cq_pending(&ctrl->admin_q))
+        return 0; /* not ours: let a shared line's chain walk go on */
 
     mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
 

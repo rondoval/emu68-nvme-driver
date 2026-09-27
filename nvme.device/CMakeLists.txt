@@ -105,6 +105,10 @@ target_link_libraries(nvme.device
 # instead links debug.lib (+ __divsi3 glue) and skips the ROM check.
 emu68_debug_backend_finalize(nvme.device ROMABLE)
 
+# Exec interrupt servers answer with the Z flag, not D0 (exec.library/AddIntServer);
+# a compiler epilogue that ends in MOVE rather than MOVEM silently overwrites it.
+emu68_isr_z_check(nvme.device SERVERS nvme_int_isr)
+
 install(
     PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvme.device
     DESTINATION DEVS

@@ -167,6 +167,30 @@ void nvme_teardown_queue(struct nvme_queue *q)
 }
 
 /*
+ * nvme_cq_pending - is the CQE at cq_head fresh?  Same test drain_cq makes,
+ * without consuming anything: invalidate the CQE's cache line (the controller
+ * DMA-wrote it, so a cached copy may be stale) and compare its phase bit with
+ * the one we expect.
+ *
+ * This is what lets the interrupt server tell our interrupt from another
+ * device's on a shared INTx line.  NVMe has no interrupt-status register, and
+ * the pin is asserted only while a completion queue has entries the host has
+ * not consumed, so a fresh CQE is exactly the condition.
+ */
+BOOL nvme_cq_pending(struct nvme_queue *q)
+{
+    struct ExecBase *SysBase = q->sysBase;
+
+    if (!q->cq)
+        return FALSE;
+
+    struct nvme_completion *cqe = &q->cq[q->cq_head];
+    nvme_cache_inval(cqe, sizeof(*cqe));
+
+    return (le16(cqe->status) & 1) == q->cq_phase;
+}
+
+/*
  * drain_cq - walk a single queue's CQ from cq_head, looking for fresh
  * entries (phase bit matches q->cq_phase).  Each fresh CQE has its
  * status/result copied into the inflight request, then nvme_complete_rq

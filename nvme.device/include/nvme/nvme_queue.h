@@ -96,6 +96,13 @@ u32 nvme_process_completions(struct NVMeController *ctrl); /* returns I/O CQEs d
 void nvme_tick_watchdog(struct NVMeController *ctrl);
 
 /*
+ * Is a fresh CQE waiting at @q's head?  The interrupt server's "was this
+ * interrupt mine?" test on a shared INTx line — see nvme_int_isr.  Called at
+ * interrupt level; invalidates one cache line, touches nothing else.
+ */
+BOOL nvme_cq_pending(struct nvme_queue *q);
+
+/*
  * SQ-tail doorbell batching (mirrors Linux nvme_write_sq_db / commit_rqs).
  *
  * nvme_submit_io rings the doorbell immediately when sq_batch_depth == 0.
