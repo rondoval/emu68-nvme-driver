@@ -92,7 +92,7 @@ void nvme_teardown_queue(struct nvme_queue *q);
  * Completion drain and watchdog tick — both called from the unit task's
  * Wait()-loop.
  */
-void nvme_process_completions(struct NVMeController *ctrl);
+u32 nvme_process_completions(struct NVMeController *ctrl); /* returns I/O CQEs drained */
 void nvme_tick_watchdog(struct NVMeController *ctrl);
 
 /*

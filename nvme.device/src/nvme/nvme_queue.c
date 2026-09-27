@@ -174,7 +174,7 @@ void nvme_teardown_queue(struct nvme_queue *q)
  * advances with phase-flip on ring wrap; the new head is written to
  * q->cq_db_off if anything was drained.
  */
-static void drain_cq(struct nvme_queue *q)
+static u32 drain_cq(struct nvme_queue *q)
 {
     struct ExecBase *SysBase = q->sysBase;
     u16 head = q->cq_head;
@@ -183,7 +183,7 @@ static void drain_cq(struct nvme_queue *q)
     ULONG inval_line = 1; /* never a valid 64-byte line address */
 
     if (!q->cq)
-        return;
+        return 0;
 
     while (1)
     {
@@ -251,8 +251,11 @@ static void drain_cq(struct nvme_queue *q)
     {
         q->cq_head = head;
         q->cq_phase = (u8)phase;
-        mmio_write32((u32)head, (volatile UBYTE *)q->ctrl->bar0 + q->cq_db_off);
+        /* Relaxed: later accesses to the controller stay ordered behind it
+         * (Device memory), and nothing waits on its completion. */
+        mmio_write32_relaxed((u32)head, (volatile UBYTE *)q->ctrl->bar0 + q->cq_db_off);
     }
+    return (u32)drained;
 }
 
 /*
@@ -260,7 +263,7 @@ static void drain_cq(struct nvme_queue *q)
  *
  * Called from the controller task when the MSI signal fires.
  */
-void nvme_process_completions(struct NVMeController *ctrl)
+u32 nvme_process_completions(struct NVMeController *ctrl)
 {
     drain_cq(&ctrl->admin_q);
 
@@ -269,8 +272,9 @@ void nvme_process_completions(struct NVMeController *ctrl)
      * (nvme_resubmit_io) both fire from nvme_complete_rq.  Batch their SQ-tail
      * doorbells into a single commit for the whole drain pass. */
     nvme_sq_batch_begin(&ctrl->io_q);
-    drain_cq(&ctrl->io_q);
+    u32 drained = drain_cq(&ctrl->io_q);
     nvme_sq_batch_end(&ctrl->io_q);
+    return drained;
 }
 
 /*

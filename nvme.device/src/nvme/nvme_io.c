@@ -525,12 +525,19 @@ static struct nvme_request *nvme_req_alloc_io(struct NVMeUnit *unit,
  * the last write.  The device only ever needs the newest tail, so a run of
  * SQEs written since the previous commit costs a single doorbell (mirrors
  * Linux nvme_write_sq_db).
+ *
+ * The barrier closes the DMAF_NoSync batch: every SQE, PRP list and data
+ * cache op since the last commit rode NoSync (cache_ops.h pattern 2), so one
+ * dsb here makes all of them complete before the device can fetch.  Nothing
+ * after the doorbell depends on its completion, so the store itself is
+ * relaxed (iomem.h).
  */
 static inline void nvme_sq_commit(struct nvme_queue *q)
 {
     if (q->sq_tail != q->last_sq_tail)
     {
-        mmio_write32((u32)q->sq_tail, (volatile UBYTE *)q->ctrl->bar0 + q->sq_db_off);
+        emu68_barrier();
+        mmio_write32_relaxed((u32)q->sq_tail, (volatile UBYTE *)q->ctrl->bar0 + q->sq_db_off);
         q->last_sq_tail = q->sq_tail;
     }
 }
@@ -605,9 +612,10 @@ BYTE nvme_submit_io(struct nvme_request *req)
      * little-endian via cpu_to_leXX, so plain memcpy is correct. */
     memcpy(slot, &req->cmd, sizeof(req->cmd));
 
-    /* Cache flush: device DMA-reads this SQE from DRAM.  Without
-     * CachePreDMA the device may see stale cache lines and read garbage. */
-    nvme_cache_flush(slot, sizeof(struct nvme_command), TRUE);
+    /* Cache clean: the device DMA-reads this SQE from DRAM.  NoSync like the
+     * command's data and PRP ops: nvme_sq_commit's barrier closes the whole
+     * batch before the doorbell. */
+    nvme_cache_flush_ns(slot, sizeof(struct nvme_command), TRUE);
 
     q->sq_tail = next;
 
