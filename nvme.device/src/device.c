@@ -25,15 +25,18 @@
 #include "mounter.h"
 
 /*
- * Placed first so that accidentally running the device as a program
- * returns -1 instead of jumping into code.
+ * Running the device as a program must return -1 rather than jump into code, which means
+ * this has to sit at offset 0: LoadSeg() starts there.  .text.entry is placed first by
+ * ldscripts/module.lds; `used` keeps it alive (it has no caller, and -Wl,-e is not an LTO
+ * root).  See Emu68CommonModuleLayout.cmake.
  */
 int doNotExecute(void);
-int __attribute__((used, no_reorder)) doNotExecute(void)
+int __attribute__((used, section(".text.entry"))) doNotExecute(void)
 {
     return -1;
 }
 
+/* RT_ENDSKIP; supplied by the linker script at the end of .text. */
 extern const UBYTE endOfCode;
 
 static const char deviceName[] = DEVICE_NAME;
@@ -62,7 +65,7 @@ static const APTR funcTable[];
 static s32 devEnsureProbed(struct NVMeDevice *base);
 static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase);
 
-static struct Resident const nvmeDeviceResident __attribute__((used, no_reorder)) = {
+static struct Resident const nvmeDeviceResident __attribute__((used, section(".text.modhdr"))) = {
     RTC_MATCHWORD,
     (struct Resident *)&nvmeDeviceResident,
     (APTR)&endOfCode,

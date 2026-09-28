@@ -71,8 +71,6 @@ target_include_directories(nvmeinfo PRIVATE
 )
 
 # Hosted CLI programs: not ROMABLE, so no ROM check.
-emu68_debug_backend_finalize(nvmeinfo)
-emu68_debug_backend_finalize(nvmeadm)
 
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvmeinfo DESTINATION C)
 install(PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvmeadm DESTINATION C)

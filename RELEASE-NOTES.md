@@ -23,6 +23,14 @@ Changes since v1.5.
   and MSI-X the interrupt handler now masks the vector at the PCIe root complex
   and the unit task unmasks it after draining; an interrupt that arrives while
   masked fires on unmask. INTx keeps masking at the controller.
+- **ROM builds: the driver under-reported its own size by about 12 KB.** The
+  romtag's `RT_ENDSKIP` marks where Kickstart resumes scanning for the next
+  module, and it was set from a marker that only covered the driver's own
+  object files — everything drawn in from the shared libraries sat past it. The
+  ROM scan therefore walked back over 12 KB of driver code looking for module
+  headers. It is now placed by the linker at the true end of the module, so it
+  is exact by construction. Also affects the free-space figure
+  `scripts/build-kickstart.sh` reports.
 
 ---
 

@@ -13,6 +13,8 @@
 #include <libraries/pci_constants.h> /* PCI_IRQ_* flags */
 #include <libraries/pci_irq.h>
 
+#include <intserver.h>
+
 #include "nvme/nvme_ctrl.h"
 #include "device.h"
 
@@ -40,9 +42,10 @@
  *     consumed, so a fresh CQE on either queue is the test.  It also covers
  *     the controller that has gone away: no CQEs, nothing to mask or drain.
  */
-static ULONG nvme_int_isr(struct ExecBase *SysBase asm("a6"),
-                          struct NVMeController *ctrl asm("a1"),
-                          ULONG vector asm("d0"))
+static EMU68_INTSERVER(nvme_int_isr)
+ULONG nvme_int_isr(struct ExecBase *SysBase asm("a6"),
+                   struct NVMeController *ctrl asm("a1"),
+                   ULONG vector asm("d0"))
 {
     (void)vector;
 
