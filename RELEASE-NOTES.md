@@ -23,6 +23,10 @@ Changes since v1.5.
   and MSI-X the interrupt handler now masks the vector at the PCIe root complex
   and the unit task unmasks it after draining; an interrupt that arrives while
   masked fires on unmask. INTx keeps masking at the controller.
+- **INTx: some controllers froze the machine on the first read or write.**
+  The Realtek 10ec:5765 kept its interrupt line asserted because the driver
+  masked only vector 0. It now masks every vector. MSI and MSI-X were not
+  affected.
 - **ROM builds: the driver under-reported its own size by about 12 KB.** The
   romtag's `RT_ENDSKIP` marks where Kickstart resumes scanning for the next
   module, and it was set from a marker that only covered the driver's own

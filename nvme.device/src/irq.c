@@ -19,6 +19,20 @@
 #include "device.h"
 
 /*
+ * What INTMS/INTMC are written with: every vector, not vector 0 alone.
+ *
+ * Pin-based mode defines only vector 0 (NVMe 1.4c 7.5.1: IS[0] drives the
+ * line, and Create I/O CQ takes IV = 0), so bit 0 ought to be enough.  The
+ * Realtek 10ec:5765 raises its I/O queue's interrupt on the bit of the queue
+ * ID instead, and drives the pin from that too: masking bit 0 quiets admin
+ * completions, but the first I/O completion leaves the line asserted, and the
+ * interrupt then repeats without end, keeping the unit task from ever running
+ * to acknowledge it.  A controller that follows the specification has nothing
+ * behind the other bits, so writing them all costs it nothing.
+ */
+#define NVME_INTM_ALL_VECTORS 0xFFFFFFFFUL
+
+/*
  * nvme_int_isr - NVMe interrupt service routine.
  *
  * Called at interrupt level.  Masks the interrupt source so completions that
@@ -64,7 +78,7 @@ ULONG nvme_int_isr(struct ExecBase *SysBase asm("a6"),
     if (!nvme_cq_pending(&ctrl->io_q) && !nvme_cq_pending(&ctrl->admin_q))
         return 0; /* not ours: let a shared line's chain walk go on */
 
-    mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
+    mmio_write32(NVME_INTM_ALL_VECTORS, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
 
     Signal(ctrl->unit_task, 1UL << ctrl->irq_signal);
     return 1;
@@ -107,7 +121,7 @@ static s32 nvme_pci_int_enable(struct NVMeController *ctrl)
      * forbids host access to INTMS/INTMC there (the MSI-X entry, opened by the
      * attach, is the gate). */
     if (itype != PCI_IRQ_MSIX)
-        mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
+        mmio_write32(NVME_INTM_ALL_VECTORS, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
     Kprintf("[nvme] %s: using %s\n", __func__,
             itype == PCI_IRQ_MSIX ? "MSI-X" : itype == PCI_IRQ_MSI ? "MSI"
                                                                    : "INTx");
@@ -145,7 +159,7 @@ void nvme_int_shutdown(struct NVMeController *ctrl)
     /* INTx: quiet the pin at the controller.  MSI/MSI-X: the detach closes the
      * vector at the device (and INTMS is off limits under MSI-X). */
     if (!ctrl->msi_enabled)
-        mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
+        mmio_write32(NVME_INTM_ALL_VECTORS, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMS));
     pci_irq_detach(pcielibBase, ctrl->pci_dev, &ctrl->irq_isr);
     ctrl->msi_enabled = FALSE;
 }
@@ -166,5 +180,5 @@ void nvme_int_rearm(struct NVMeController *ctrl)
         UnmaskIntVector(ctrl->pci_dev, 0);
     }
     else
-        mmio_write32(1UL, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
+        mmio_write32(NVME_INTM_ALL_VECTORS, (volatile u32 *)((ULONG)ctrl->bar0 + NVME_REG_INTMC));
 }
