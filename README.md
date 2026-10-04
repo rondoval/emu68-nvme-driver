@@ -94,14 +94,18 @@ driver loads these from `L:` when the dostype is not already registered in `File
 configuration file, but it does depend on the PCIe and interrupt libraries above being installed
 first.
 
+Copying the files is not quite enough for partitions to appear at boot: something has to load the
+driver. See [Getting the driver loaded](#getting-the-driver-loaded).
+
 ### Automount
 
 Automount and autoboot use the [`mounter`](https://github.com/rondoval/mounter) submodule (branch
 `poseidon-fixes`, a fork of the A4091 project's mounter), shared with the Poseidon USB mass-storage
-class. Every probed namespace is scanned at init:
+class. Every probed namespace is scanned when the driver initializes:
 
-- **RDB** partitions mount with the filesystem, handler and DOS name their RDB carries, and boot
-  by RDB boot priority. Only a name that collides with an existing device is renamed.
+- **RDB** partitions mount with the filesystem, handler, DOS name and environment (MaxTransfer,
+  Mask, Buffers, …) their RDB carries, and boot by RDB boot priority. Only a name that collides
+  with an existing device is renamed.
 - **MBR, GPT and superfloppy** disks mount their FAT, NTFS and exFAT filesystems as `NVME0:`,
   `NVME1:`, … (collisions bumped), through `fat95` / `NTFileSystem3G` / `exFATFileSystem` — the
   same three recipes `massstorage.class` uses, so a drive moved between a USB enclosure and an
@@ -112,6 +116,65 @@ class. Every probed namespace is scanned at init:
 The recipes driving the second case — dostype, handler file, DOS name, buffer count, MaxTransfer —
 are `NVME_*` constants in [`nvme.device/include/config.h`](nvme.device/include/config.h), so a build
 can retarget them at a different filesystem.
+
+### Getting the driver loaded
+
+The mount pass runs exactly once, at the moment `nvme.device` initializes. When that happens
+depends on where the driver lives:
+
+- **Built into a custom Kickstart ROM** — the driver initializes during cold start, before DOS.
+  Partitions are registered as boot nodes, so the machine can boot from the NVMe drive, and
+  nothing else has to be set up.
+- **Installed in `DEVS:`** — AmigaOS does not load a device driver from `DEVS:` on its own; it is
+  loaded the first time something opens it. Until then the driver is not in memory and **no NVMe
+  partition appears**, however correct the partition table is. Opening HDToolBox makes them show
+  up, because HDToolBox opens the device — which is why a drive can look fine there and still be
+  missing from Workbench after a reboot.
+
+For a `DEVS:` installation, make something open the device on every boot. Either of these does it:
+
+- **A `DEVS:DOSDrivers` entry** (or mountlist) for one partition, with `Device = nvme.device` and
+  `Activate = 1` — the standard AmigaOS way. Starting that partition's filesystem opens the
+  device, the driver loads, and its mount pass brings up every *other* partition on its own.
+  Without `Activate = 1` the driver is only loaded when the entry's DOS name is first accessed.
+  The mount pass leaves alone a partition that is already mounted, recognized by device, unit,
+  `LowCyl` and `HighCyl` — so the entry's geometry must match what the RDB says. An entry whose
+  cylinder range differs is not recognized, and the same blocks get mounted a second time under
+  a renamed device.
+- **One line in `S:User-Startup`**, with no mount entry at all:
+
+  ```
+  C:nvmeadm units >NIL:
+  ```
+
+  `nvmeadm units` only lists the units, but opening `nvme.device` to do so loads the driver, and
+  the partitions mount right there — the volumes are available to every line that follows. Put
+  it ahead of anything that uses them. Nothing has to be kept in step with the partition table.
+
+Two consequences of the mount pass running once per boot:
+
+- A drive that has just been partitioned (or repartitioned) in HDToolBox needs a reboot before
+  the new partitions appear; they then show up unformatted, ready for `Format`.
+- With the driver in `DEVS:` the machine cannot boot *from* the NVMe drive, since the driver
+  itself has to be read from the boot volume first. Booting from NVMe needs the ROM build.
+
+### Partition settings: MaxTransfer and Mask
+
+These apply to RDB partitions, where you set them in HDToolBox; the MBR/GPT recipes already carry
+suitable values.
+
+- **MaxTransfer** — use `0x00FFFFFF` or larger. `nvme.device` imposes no transfer-size limit on its
+  callers: a request bigger than the controller accepts in one command (its MDTS, or 8 MiB when
+  the controller reports none) is split inside the driver. The `0x1FE00` value often recommended
+  for IDE drives is not needed here and is expensive — it makes the filesystem chop every transfer
+  into pieces of about 128 KB.
+- **Mask** — no restriction is needed for correctness; `0x7FFFFFFE` is fine. PCIe DMA cannot reach
+  Chip RAM or Fast RAM that Emu68 does not provide, and needs 64-byte-aligned buffers, but the
+  driver checks every request and stages those it cannot transfer directly through a bounce
+  buffer of its own.
+
+Raw device throughput is a little over 400 MB/s depending on the drive; what a filesystem
+delivers on top of that is lower and varies with the filesystem.
 
 ---
 
@@ -130,7 +193,7 @@ can retarget them at a different filesystem.
 - device-specific quirk handling carried over from Linux where it is relevant to this port
 - Host Memory Buffer setup for DRAM-less controllers that expose HMB capability
 - automount of RDB partitions, plus FAT, NTFS and exFAT filesystems on MBR/GPT/superfloppy disks
-- can be built into a custom Kickstart ROM , so the machine can boot from an NVMe volume
+- can be built into a custom Kickstart ROM, so the machine can boot from an NVMe volume
 
 ### Block I/O functionality
 
