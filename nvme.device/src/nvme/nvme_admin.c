@@ -13,7 +13,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -75,6 +75,7 @@ static struct nvme_request *nvme_req_alloc_admin(struct NVMeController *ctrl,
     }
 
     req->ac = ctrl;
+    req->sysBase = ctrl->sysBase;
     req->q = q;
     req->cid = cid;
     nvme_inflight_claim(q, cid, req);
@@ -118,6 +119,7 @@ static void nvme_init_request(struct nvme_request *req, struct nvme_command *cmd
 static void nvme_stage_admin_prps(struct nvme_request *req,
                                   void *buffer, u32 buflen)
 {
+    struct ExecBase *SysBase = req->sysBase;
     /* No data payload: leave dptr untouched.  Some admin commands
      * (Create I/O CQ / Create I/O SQ) carry the queue base address in
      * prp1 instead of pointing at a data buffer — the caller fills
@@ -178,6 +180,7 @@ static void nvme_stage_admin_prps(struct nvme_request *req,
 int nvme_submit_sync_cmd(struct NVMeController *ctrl, struct nvme_command *cmd,
                          union nvme_result *result, void *buffer, u32 buflen)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     KprintfT("[nvme] submit_sync_cmd: ctrl=%lx opcode=0x%02lx (%s) buf=%lx buflen=%lu result=%lx\n",
              (ULONG)ctrl, (ULONG)cmd->common.opcode,
              nvme_get_admin_opcode_str(cmd->common.opcode),
@@ -461,10 +464,11 @@ int nvme_set_features(struct NVMeController *dev, unsigned int fid,
  */
 int nvme_configure_timestamp(struct NVMeController *ctrl)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (!(ctrl->oncs & NVME_CTRL_ONCS_TIMESTAMP))
         return 0;
 
-    __le64 ts __attribute__((aligned(4))) = le64(nvme_unix_time_ms());
+    __le64 ts __attribute__((aligned(4))) = le64(nvme_unix_time_ms(SysBase));
     int ret = nvme_set_features(ctrl, NVME_FEAT_TIMESTAMP, 0, &ts, sizeof(ts), NULL);
     if (ret)
         Kprintf("[nvme] %s: could not set timestamp (%ld)\n", __func__, ret);

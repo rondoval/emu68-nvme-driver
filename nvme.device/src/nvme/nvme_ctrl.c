@@ -333,9 +333,9 @@ static int nvme_init_effects(struct NVMeController *ctrl, struct nvme_id_ctrl *i
 static void nvme_cache_id_strings(struct NVMeController *ctrl,
 		const char *mn, const char *fr, const char *sn)
 {
-	CopyMem(mn, ctrl->id_strings.model, sizeof(ctrl->id_strings.model));
-	CopyMem(fr, ctrl->id_strings.firmware, sizeof(ctrl->id_strings.firmware));
-	CopyMem(sn, ctrl->id_strings.serial, sizeof(ctrl->id_strings.serial));
+	memcpy(ctrl->id_strings.model, mn, sizeof(ctrl->id_strings.model));
+	memcpy(ctrl->id_strings.firmware, fr, sizeof(ctrl->id_strings.firmware));
+	memcpy(ctrl->id_strings.serial, sn, sizeof(ctrl->id_strings.serial));
 	Kprintf("[nvme] %s: model='%.40s' fw='%.8s' sn='%.20s'\n",
 		__func__,
 		ctrl->id_strings.model,

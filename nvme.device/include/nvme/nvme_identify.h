@@ -21,6 +21,7 @@ struct nvme_ns {
 	struct MinNode mn_Node;
 
 	struct NVMeController *ctrl;
+	struct ExecBase *sysBase; /* ctrl->sysBase, copied at alloc */
 	u32 ns_id;
 	u8 lba_shift;
 	u64 disk_capacity_sectors;

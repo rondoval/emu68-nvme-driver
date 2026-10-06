@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(nvme.device VERSION ${CMAKE_PROJECT_VERSION})
+project(nvme.device VERSION ${CMAKE_PROJECT_VERSION} LANGUAGES C ASM)
 
 # Debug-output backend defines (EMU68_DEBUG_BACKEND, see emu68-common).
 emu68_debug_definitions()
@@ -12,7 +12,6 @@ add_link_options(
     -nostdlib
     -nostartfiles
     -s
-    -Wl,-e,_doNotExecute
 )
 
 # CPU/FPU/frame-pointer flags come from the stack toolchain (cmake/toolchain.cmake,
@@ -69,8 +68,7 @@ add_executable(nvme.device
     mounter/mounter_rdb.c
     mounter/mounter_cd.c
     mounter/mounter_legacy.c
-    mounter/bootpoint.c
-    src/device_end.c
+    mounter/bootpoint.S
 )
 
 target_include_directories(nvme.device
@@ -103,7 +101,14 @@ target_link_libraries(nvme.device
 
 # ROM-able: no writable .data/.bss may sneak in. For the serial backend this
 # instead links debug.lib (+ __divsi3 glue) and skips the ROM check.
-emu68_debug_backend_finalize(nvme.device ROMABLE)
+# Layout contract (entry at offset 0, RT_ENDSKIP, no writable sections) belongs to the
+# linker, not to source order -- see Emu68CommonModuleLayout.cmake.
+emu68_module_layout(nvme.device)
+
+# Exec interrupt servers answer with the Z flag, not D0 (exec.library/AddIntServer);
+# a compiler epilogue that ends in MOVE rather than MOVEM silently overwrites it.
+emu68_enable_lto(nvme.device)
+emu68_isr_z_check(nvme.device SERVERS nvme_int_isr)
 
 install(
     PROGRAMS ${CMAKE_CURRENT_BINARY_DIR}/nvme.device

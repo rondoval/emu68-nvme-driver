@@ -4,7 +4,7 @@
 #include <clib/bcmpcie_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #define BCMPCIE_BASE_NAME pcielibBase
 #include <proto/bcmpcie.h>
@@ -25,15 +25,18 @@
 #include "mounter.h"
 
 /*
- * Placed first so that accidentally running the device as a program
- * returns -1 instead of jumping into code.
+ * Running the device as a program must return -1 rather than jump into code, which means
+ * this has to sit at offset 0: LoadSeg() starts there.  .text.entry is placed first by
+ * ldscripts/module.lds; `used` keeps it alive (it has no caller, and -Wl,-e is not an LTO
+ * root).  See Emu68CommonModuleLayout.cmake.
  */
 int doNotExecute(void);
-int __attribute__((used, no_reorder)) doNotExecute(void)
+int __attribute__((used, section(".text.entry"))) doNotExecute(void)
 {
     return -1;
 }
 
+/* RT_ENDSKIP; supplied by the linker script at the end of .text. */
 extern const UBYTE endOfCode;
 
 static const char deviceName[] = DEVICE_NAME;
@@ -41,17 +44,14 @@ static const char deviceIdString[] = DEVICE_IDSTRING;
 
 #ifdef MOUNTER_LOG
 /* MOUNTER_LOG sink: route the mounter submodule's diagnostics (%l-normalized
- * RawDoFmt format strings) to the debug backend.  Prototype declared here
+ * RawDoFmt format strings) to the debug backend (debug.h fmt_vformat sink).  Prototype declared here
  * because the mounter only declares it internally. */
 void mounter_log(const char *fmt, ...);
 void mounter_log(const char *fmt, ...)
 {
     va_list args;
     va_start(args, fmt);
-#pragma GCC diagnostic push
-#pragma GCC diagnostic ignored "-Wstrict-prototypes"
-    RawDoFmt((CONST_STRPTR)fmt, args, (APTR)putch, NULL);
-#pragma GCC diagnostic pop
+    fmt_vformat(debug_putch, NULL, (CONST_STRPTR)fmt, args);
     va_end(args);
 }
 #endif
@@ -60,12 +60,12 @@ void mounter_log(const char *fmt, ...)
  * Forward declarations needed before _doInit and the Resident struct.
  */
 static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"));
-APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *_SysBase asm("a6"));
+APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *SysBase asm("a6"));
 static const APTR funcTable[];
 static s32 devEnsureProbed(struct NVMeDevice *base);
 static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase);
 
-static struct Resident const nvmeDeviceResident __attribute__((used, no_reorder)) = {
+static struct Resident const nvmeDeviceResident __attribute__((used, section(".text.modhdr"))) = {
     RTC_MATCHWORD,
     (struct Resident *)&nvmeDeviceResident,
     (APTR)&endOfCode,
@@ -90,7 +90,7 @@ static struct Resident const nvmeDeviceResident __attribute__((used, no_reorder)
  */
 static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase asm("a6"))
 {
-    if (!emu68_has_dcache_range_ops())
+    if (!emu68_has_dcache_range_ops(SysBase))
     {
         Kprintf("[nvme] %s: rangeops build, but Emu68 lacks dcache-range-ops rev 1 - refusing to load. Install the standard driver package or update Emu68.\n", __func__);
         return NULL;
@@ -120,6 +120,7 @@ static struct Library *_doInit(BPTR segList asm("a0"), struct ExecBase *SysBase 
 
 static void nvme_close_libraries(struct NVMeDevice *base)
 {
+    struct ExecBase *SysBase = base->sysBase;
     if (base->pcieBase != NULL)
     {
         CloseLibrary(base->pcieBase);
@@ -135,6 +136,7 @@ static void nvme_close_libraries(struct NVMeDevice *base)
 
 static s32 nvme_open_libraries(struct NVMeDevice *base)
 {
+    struct ExecBase *SysBase = base->sysBase;
     if (base->utilityBase != NULL && base->pcieBase != NULL)
         return ERR_NO_ERROR; /* already open */
 
@@ -280,9 +282,9 @@ static void nvme_device_reset_prepare(APTR user)
     nvme_reset_quiesce_all(user);
 }
 
-APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *_SysBase asm("a6"))
+APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *SysBase asm("a6"))
 {
-    (void)_SysBase;
+    base->sysBase = SysBase;
     base->segList = segList;
     base->device.dd_Library.lib_IdString = (APTR)deviceIdString;
     base->device.dd_Library.lib_Version = DEVICE_VERSION;
@@ -297,7 +299,7 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
     base->utilityBase = NULL;
     base->pcieBase = NULL;
 
-    if (!reset_guard_install(&base->resetGuard, nvme_device_reset_prepare, base,
+    if (!reset_guard_install(&base->resetGuard, SysBase, nvme_device_reset_prepare, base,
                              (CONST_STRPTR) "nvme.device"))
         Kprintf("[nvme] %s: reset guard install failed\n", __func__);
 
@@ -317,6 +319,7 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
 static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
                     ULONG flags asm("d1"), struct NVMeDevice *base asm("a6"))
 {
+    struct ExecBase *SysBase = base->sysBase;
     KprintfT("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
 
     /* Probe once: enumerate all NVMe controllers and build the unit list */
@@ -375,6 +378,7 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
 
 static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
 {
+    struct ExecBase *SysBase = base->sysBase;
     if (base->device.dd_Library.lib_OpenCnt > 0)
     {
         base->device.dd_Library.lib_Flags |= LIBF_DELEXP;

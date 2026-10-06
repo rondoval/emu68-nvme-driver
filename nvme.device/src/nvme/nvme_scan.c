@@ -175,6 +175,7 @@ static void nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
  */
 static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info)
 {
+	struct ExecBase *SysBase = ctrl->sysBase;
 	/* Reactive bogus-NID detection: if this namespace's non-zero
 	 * identifiers collide with one already on the controller, the device is
 	 * reporting garbage NIDs.  Clear them and latch the quirk so every later
@@ -195,6 +196,7 @@ static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info
 		return;
 
 	ns->ctrl = ctrl;
+	ns->sysBase = ctrl->sysBase;
 	ns->ns_id = info->nsid;
 	ns->ids = info->ids;
 
@@ -222,6 +224,7 @@ static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info
  */
 static void nvme_ns_remove(struct nvme_ns *ns)
 {
+	struct ExecBase *SysBase = ns->sysBase;
 	if (test_and_set_bit(NVME_NS_REMOVING, &ns->flags))
 		return;
 
@@ -473,6 +476,7 @@ static void nvme_clear_changed_ns_log(struct NVMeController *ctrl)
  */
 void nvme_scan_namespaces(struct NVMeController *ctrl)
 {
+	struct ExecBase *SysBase = ctrl->sysBase;
 	if (nvme_ctrl_state(ctrl) != NVME_CTRL_LIVE)
 		return;
 

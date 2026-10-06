@@ -19,7 +19,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -58,6 +58,7 @@
  */
 static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u16 qid, u16 depth)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     /* SQE stride: 64 B normally; 128 B on the I/O queue when
      * NVME_QUIRK_128_BYTES_SQES is set (some Apple controllers require a
      * non-standard stride and ignore CC.IOSQES).  Admin (qid 0) is always 64. */
@@ -73,6 +74,7 @@ static s32 nvme_setup_queue(struct NVMeController *ctrl, struct nvme_queue *q, u
 
     memset(q, 0, sizeof(*q));
     q->ctrl = ctrl;
+    q->sysBase = ctrl->sysBase;
     q->qid = qid;
     q->depth = depth;
     q->sqe_128b = sqe_128b;
@@ -144,6 +146,7 @@ fail_sq:
  */
 void nvme_teardown_queue(struct nvme_queue *q)
 {
+    struct ExecBase *SysBase = q->sysBase;
     KprintfT("[nvme] teardown_queue: q=%lx qid=%lu sq=%lx cq=%lx inflight=%lx\n",
              (ULONG)q, (ULONG)q->qid,
              (ULONG)q->sq, (ULONG)q->cq, (ULONG)q->inflight);
@@ -164,6 +167,30 @@ void nvme_teardown_queue(struct nvme_queue *q)
 }
 
 /*
+ * nvme_cq_pending - is the CQE at cq_head fresh?  Same test drain_cq makes,
+ * without consuming anything: invalidate the CQE's cache line (the controller
+ * DMA-wrote it, so a cached copy may be stale) and compare its phase bit with
+ * the one we expect.
+ *
+ * This is what lets the interrupt server tell our interrupt from another
+ * device's on a shared INTx line.  NVMe has no interrupt-status register, and
+ * the pin is asserted only while a completion queue has entries the host has
+ * not consumed, so a fresh CQE is exactly the condition.
+ */
+BOOL nvme_cq_pending(struct nvme_queue *q)
+{
+    struct ExecBase *SysBase = q->sysBase;
+
+    if (!q->cq)
+        return FALSE;
+
+    struct nvme_completion *cqe = &q->cq[q->cq_head];
+    nvme_cache_inval(cqe, sizeof(*cqe));
+
+    return (le16(cqe->status) & 1) == q->cq_phase;
+}
+
+/*
  * drain_cq - walk a single queue's CQ from cq_head, looking for fresh
  * entries (phase bit matches q->cq_phase).  Each fresh CQE has its
  * status/result copied into the inflight request, then nvme_complete_rq
@@ -171,15 +198,16 @@ void nvme_teardown_queue(struct nvme_queue *q)
  * advances with phase-flip on ring wrap; the new head is written to
  * q->cq_db_off if anything was drained.
  */
-static void drain_cq(struct nvme_queue *q)
+static u32 drain_cq(struct nvme_queue *q)
 {
+    struct ExecBase *SysBase = q->sysBase;
     u16 head = q->cq_head;
     u16 phase = q->cq_phase;
     int drained = 0;
     ULONG inval_line = 1; /* never a valid 64-byte line address */
 
     if (!q->cq)
-        return;
+        return 0;
 
     while (1)
     {
@@ -247,8 +275,11 @@ static void drain_cq(struct nvme_queue *q)
     {
         q->cq_head = head;
         q->cq_phase = (u8)phase;
-        mmio_write32((u32)head, (volatile UBYTE *)q->ctrl->bar0 + q->cq_db_off);
+        /* Relaxed: later accesses to the controller stay ordered behind it
+         * (Device memory), and nothing waits on its completion. */
+        mmio_write32_relaxed((u32)head, (volatile UBYTE *)q->ctrl->bar0 + q->cq_db_off);
     }
+    return (u32)drained;
 }
 
 /*
@@ -256,7 +287,7 @@ static void drain_cq(struct nvme_queue *q)
  *
  * Called from the controller task when the MSI signal fires.
  */
-void nvme_process_completions(struct NVMeController *ctrl)
+u32 nvme_process_completions(struct NVMeController *ctrl)
 {
     drain_cq(&ctrl->admin_q);
 
@@ -265,8 +296,9 @@ void nvme_process_completions(struct NVMeController *ctrl)
      * (nvme_resubmit_io) both fire from nvme_complete_rq.  Batch their SQ-tail
      * doorbells into a single commit for the whole drain pass. */
     nvme_sq_batch_begin(&ctrl->io_q);
-    drain_cq(&ctrl->io_q);
+    u32 drained = drain_cq(&ctrl->io_q);
     nvme_sq_batch_end(&ctrl->io_q);
+    return drained;
 }
 
 /*
@@ -309,6 +341,7 @@ void nvme_process_completions(struct NVMeController *ctrl)
  */
 static void nvme_watchdog_escalate(struct NVMeController *ctrl, struct nvme_queue *q)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (nvme_ctrl_state(ctrl) == NVME_CTRL_LIVE)
         Signal(ctrl->unit_task, 1UL << ctrl->reset_signal);
     else
@@ -397,6 +430,7 @@ static void watchdog_scan_queue(struct nvme_queue *q, u32 now)
  */
 void nvme_tick_watchdog(struct NVMeController *ctrl)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     /* Reap any CQEs the controller posted without (or before) an MSI: the
      * completion was DMA-written to host memory regardless of whether the
      * interrupt was delivered, so a missing/late MSI must not strand it
@@ -820,6 +854,7 @@ void nvme_unfreeze(struct NVMeController *ctrl)
 {
     if (!ctrl)
         return;
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (!test_and_clear_bit(NVME_CTRL_FROZEN, &ctrl->flags))
         return;
     Kprintf("[nvme] %s: I/O queues unfrozen\n", __func__);
@@ -860,6 +895,7 @@ void nvme_unquiesce_io_queues(struct NVMeController *ctrl)
 {
     if (!ctrl)
         return;
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (!test_and_clear_bit(NVME_CTRL_STOPPED, &ctrl->flags))
         return;
     Kprintf("[nvme] %s: I/O queues unquiesced\n", __func__);
@@ -899,6 +935,7 @@ void nvme_unquiesce_admin_queue(struct NVMeController *ctrl)
 {
     if (!ctrl)
         return;
+    struct ExecBase *SysBase = ctrl->sysBase;
     if (!test_and_clear_bit(NVME_CTRL_ADMIN_Q_STOPPED, &ctrl->flags))
         return;
     Kprintf("[nvme] %s: admin queue unquiesced\n", __func__);

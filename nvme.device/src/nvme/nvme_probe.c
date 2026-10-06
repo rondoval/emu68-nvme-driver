@@ -13,7 +13,7 @@
 #include <clib/bcmpcie_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #define BCMPCIE_BASE_NAME pcielibBase
 #include <proto/bcmpcie.h>
@@ -40,6 +40,16 @@
 #include <nvme/nvme_quirks.h> /* nvme_lookup_quirks */
 #include <nvme/nvme_scan.h>   /* nvme_scan_namespaces */
 
+/* [nvme] perf slot names - rodata; order matches enum NVMeProfSlot. */
+static const char *const nvme_perf_names[NP_SLOT_COUNT] = {
+    "submit", "drain", "wake",
+};
+
+/* Completions one interrupt drains: 1 = no coalescing at all. */
+static const u32 nvme_cqe_per_wake_bounds[NVME_CQE_PER_WAKE_BOUNDS] = {
+    0, 1, 2, 4, 8, 16, 32,
+};
+
 /* NVMe PCI class code: Mass Storage / NVM Express (base 0x01, sub 0x08, prog-if 0x02) */
 #define NVME_PCI_CLASS 0x010802UL
 
@@ -63,6 +73,7 @@ static BOOL nvme_pci_is_supported(struct Library *pcielibBase, struct pci_dev *p
 
 static s32 hw_init(struct NVMeController *ctrl)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     struct Library *pcielibBase = ctrl->device->pcieBase;
     struct pci_dev *pd = ctrl->pci_dev;
 
@@ -164,6 +175,7 @@ static int nvme_wait_ready(struct NVMeController *ctrl, u32 mask, u32 val,
 
 static int nvme_init_ctrl(struct NVMeController *ctrl, unsigned long quirks)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     ctrl->state = NVME_CTRL_NEW;
     _NewMinList(&ctrl->namespaces);
     InitSemaphore(&ctrl->scan_lock);
@@ -373,6 +385,7 @@ static void nvme_start_ctrl(struct NVMeController *ctrl)
  */
 static s32 nvme_probe_controller(struct NVMeController *ctrl)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     s32 ret;
 
     KprintfT("[nvme] probe_controller: ctrl=%lx pci_dev=%lx\n", (ULONG)ctrl, (ULONG)ctrl->pci_dev);
@@ -384,7 +397,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
     /* DMA buffers must live in Emu68 (Pi-DRAM) RAM the PCIe engine can reach, so the
      * DMA pool is region-restricted; with no device tree there is no reachable region
      * and we refuse to attach.  CPU-only metadata uses a separate ordinary Exec pool. */
-    dma_mem_init(&ctrl->dma_ctx);
+    dma_mem_init(&ctrl->dma_ctx, SysBase);
     ctrl->dmaPool = dma_pool_create(&ctrl->dma_ctx);
     ctrl->metaPool = CreatePool(MEMF_FAST | MEMF_PUBLIC, 256 * 1024, 8192);
     if (!ctrl->dmaPool || !ctrl->metaPool)
@@ -417,19 +430,19 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
      *   prp_small_slab — 64 per grow (256 B; the common ≤128 KiB transfer).
      * The small pool is 256 B / 32 entries (Linux's prp_small_pool); its
      * alignment is bumped to 512 B under NVME_QUIRK_DMAPOOL_ALIGN_512. */
-    slab_cache_init(&ctrl->req_slab, ctrl->metaPool, NULL,
+    slab_cache_init(&ctrl->req_slab, SysBase, ctrl->metaPool, NULL,
                     sizeof(struct nvme_request), 0, 64);
-    slab_cache_init(&ctrl->ctx_slab, ctrl->metaPool, NULL,
+    slab_cache_init(&ctrl->ctx_slab, SysBase, ctrl->metaPool, NULL,
                     sizeof(struct nvme_io_context), 0, 16);
-    slab_cache_init(&ctrl->prp_large_slab, ctrl->metaPool, ctrl->dmaPool,
+    slab_cache_init(&ctrl->prp_large_slab, SysBase, ctrl->metaPool, ctrl->dmaPool,
                     NVME_CTRL_PAGE_SIZE, NVME_CTRL_PAGE_SIZE, 16);
-    slab_cache_init(&ctrl->prp_small_slab, ctrl->metaPool, ctrl->dmaPool,
+    slab_cache_init(&ctrl->prp_small_slab, SysBase, ctrl->metaPool, ctrl->dmaPool,
                     NVME_SMALL_POOL_SIZE,
                     (ctrl->quirks & NVME_QUIRK_DMAPOOL_ALIGN_512) ? 512u
                                                                   : NVME_SMALL_POOL_SIZE,
                     64);
 
-    ret = drv_task_spawn(ctrl, UnitTask, "NVMe storage driver",
+    ret = drv_task_spawn(SysBase, ctrl, UnitTask, "NVMe storage driver",
                          STACK_SIZE, UNIT_TASK_PRIORITY);
     if (ret != 0)
     {
@@ -437,7 +450,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
         goto fail_pool;
     }
 
-    ret = drv_task_spawn(ctrl, AdminWorker, "NVMe admin worker",
+    ret = drv_task_spawn(SysBase, ctrl, AdminWorker, "NVMe admin worker",
                          STACK_SIZE, UNIT_TASK_PRIORITY);
     if (ret != 0)
     {
@@ -534,9 +547,9 @@ fail_admin:
 fail_int:
     nvme_int_shutdown(ctrl);
 fail_admin_task:
-    drv_task_join(&ctrl->admin_task);
+    drv_task_join(SysBase, &ctrl->admin_task);
 fail_unit_task:
-    drv_task_join(&ctrl->unit_task);
+    drv_task_join(SysBase, &ctrl->unit_task);
 fail_pool:
     slab_cache_destroy(&ctrl->prp_small_slab);
     slab_cache_destroy(&ctrl->prp_large_slab);
@@ -566,6 +579,7 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
                                      u64 logicalSectors,
                                      ULONG features)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     struct NVMeDevice *base = ctrl->device;
 
     struct NVMeUnit *unit = pool_zalloc(ctrl->metaPool, sizeof(*unit));
@@ -576,6 +590,7 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
     }
 
     unit->ctrl = ctrl;
+    unit->sysBase = ctrl->sysBase;
     unit->device = base;
     unit->nsid = nsid;
     unit->blockSize = blockSize;
@@ -626,6 +641,7 @@ struct NVMeUnit *nvme_alloc_nvmeunit(struct NVMeController *ctrl,
  */
 s32 nvme_probe_all(struct NVMeDevice *base)
 {
+    struct ExecBase *SysBase = base->sysBase;
     struct Library *pcielibBase = base->pcieBase;
     struct pci_dev *pd = NULL;
     int nctrls = 0;
@@ -645,7 +661,13 @@ s32 nvme_probe_all(struct NVMeDevice *base)
         ctrl->pci_dev = pd;
         ctrl->bar0 = NULL;
         ctrl->device = base;
+        ctrl->sysBase = base->sysBase;
         ctrl->utilityBase = base->utilityBase;
+        ctrl->perf = (struct perf){
+            "nvme", nvme_perf_names, ctrl->perf_slots, NP_SLOT_COUNT};
+        ctrl->cqe_per_wake = (struct perf_hist){
+            "nvme", "cqe_per_wake", nvme_cqe_per_wake_bounds,
+            ctrl->cqe_per_wake_buckets, NVME_CQE_PER_WAKE_BOUNDS};
 
         if (nvme_probe_controller(ctrl) != ERR_NO_ERROR)
         {
@@ -733,6 +755,7 @@ static void nvme_ctrl_shutdown(struct NVMeController *ctrl)
  */
 void nvme_unprobe_all(struct NVMeDevice *base)
 {
+    struct ExecBase *SysBase = base->sysBase;
     KprintfT("[nvme] unprobe_all: base=%lx\n", (ULONG)base);
 
     struct MinNode *node, *next;
@@ -756,8 +779,8 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         /* Stop AdminWorker BEFORE the unit task: AdminWorker may be
          * parked in nvme_submit_sync_cmd waiting on a CQE that only
          * the unit task delivers. */
-        drv_task_join(&ctrl->admin_task);
-        drv_task_join(&ctrl->unit_task);
+        drv_task_join(SysBase, &ctrl->admin_task);
+        drv_task_join(SysBase, &ctrl->unit_task);
         hw_shutdown(ctrl);
 
         if (ctrl->effects)

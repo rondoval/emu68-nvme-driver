@@ -3,7 +3,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -36,8 +36,8 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
 
     if (!ctrl)
     {
-        Kprintf("[nvme] %s: controller %lx never brought up\n",
-                __func__, (ULONG)ctrl->pci_dev);
+        Kprintf("[nvme] %s: unit %ld has no controller (never brought up)\n",
+                __func__, unitNumber);
         return ERR_CONTROLLER_ERROR;
     }
 
@@ -68,6 +68,7 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
  */
 static void nvme_unit_close_flush(struct NVMeUnit *unit)
 {
+    struct ExecBase *SysBase = unit->sysBase;
     struct NVMeController *ctrl = unit->ctrl;
 
     if (!(ctrl->vwc & NVME_CTRL_VWC_PRESENT))

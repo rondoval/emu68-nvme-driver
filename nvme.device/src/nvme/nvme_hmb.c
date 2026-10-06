@@ -29,7 +29,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -128,6 +128,7 @@ static int nvme_set_host_mem(struct NVMeController *ctrl, u32 bits)
 static int nvme_alloc_host_mem(struct NVMeController *ctrl,
                                u64 min, u64 preferred)
 {
+    struct ExecBase *SysBase = ctrl->sysBase;
     u32 chunks_allocated = 0;
     u64 total_allocated = 0;
 

@@ -12,7 +12,7 @@ Port history, the `pci.c` harvest inventory, and the open backlog: [`README-inte
 
 ## Build
 
-From the stack root: `cmake --build build --target emu68-nvme-driver` (CMake target `nvme.device`, installs to `DEVS:`; flags and deps in [`CMakeLists.txt`](../../CMakeLists.txt)). Debug defines come via `emu68_debug_definitions()` (sink `EMU68_DEBUG_BACKEND`, tier `EMU68_TIER`) — see emu68-common; the same `CMakeLists.txt` maps the tier onto the `mounter` submodule's own `MOUNTER_LOG`/`MOUNTER_TRACE` switches. ROM-able (`emu68_rom_check`) except the `serial` debug backend. **Always build after C edits and confirm 0 errors / 0 warnings before reporting done.**
+From the stack root: `cmake --build build --target emu68-nvme-driver` (CMake target `nvme.device`, installs to `DEVS:`; flags and deps in [`CMakeLists.txt`](../../CMakeLists.txt)). Debug defines come via `emu68_debug_definitions()` (sink `EMU68_DEBUG_BACKEND`, tier `EMU68_TIER`) — see emu68-common; the same `CMakeLists.txt` maps the tier onto the `mounter` submodule's own `MOUNTER_LOG`/`MOUNTER_TRACE` switches. ROM-able, asserted at link time by `emu68_module_layout()`'s layout script. **Always build after C edits and confirm 0 errors / 0 warnings before reporting done.**
 
 ## Source layout
 

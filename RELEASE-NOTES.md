@@ -1,3 +1,52 @@
+# Release notes — nvme.device 1.6
+
+Changes since v1.5.
+
+---
+
+## Improvements
+
+- **Less work per command.** A command's submission-queue entry is now cleaned
+  from the cache in the same deferred batch as its data and PRP lists, so the
+  whole batch completes behind one barrier right before the doorbell, instead
+  of each command paying its own. The doorbell writes themselves (submission
+  tail and completion head) no longer carry a barrier of their own.
+- **Faster copies.** Bounce-buffer, passthrough, identify and SCSI-emulation
+  copies use the library `memcpy` instead of Exec `CopyMem`.
+
+---
+
+## Bug fixes
+
+- **MSI-X: the driver no longer touches `INTMS`/`INTMC`.** The NVMe
+  specification forbids host access to those registers in MSI-X mode. Under MSI
+  and MSI-X the interrupt handler now masks the vector at the PCIe root complex
+  and the unit task unmasks it after draining; an interrupt that arrives while
+  masked fires on unmask. INTx keeps masking at the controller.
+- **INTx: some controllers froze the machine on the first read or write.**
+  The Realtek 10ec:5765 kept its interrupt line asserted because the driver
+  masked only vector 0. It now masks every vector. MSI and MSI-X were not
+  affected.
+- **ROM builds: the driver under-reported its own size by about 12 KB.** The
+  romtag's `RT_ENDSKIP` marks where Kickstart resumes scanning for the next
+  module, and it was set from a marker that only covered the driver's own
+  object files — everything drawn in from the shared libraries sat past it. The
+  ROM scan therefore walked back over 12 KB of driver code looking for module
+  headers. It is now placed by the linker at the true end of the module, so it
+  is exact by construction. Also affects the free-space figure
+  `scripts/build-kickstart.sh` reports.
+
+---
+
+## Diagnostics
+
+- **Datapath timing in `PROFILE` builds.** Every ~2 s the unit task reports
+  submit time, completion-drain time, interrupt-to-drain latency, and a
+  histogram of how many completions each interrupt finds. Other builds compile
+  this out.
+
+---
+
 # Release notes — nvme.device 1.5
 
 Changes since v1.4.

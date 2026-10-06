@@ -24,6 +24,7 @@ struct nvme_request;
 struct nvme_queue
 {
     struct NVMeController  *ctrl;       /* back-pointer to owning controller */
+    struct ExecBase        *sysBase;    /* ctrl->sysBase, copied at setup     */
     u16                     qid;        /* 0 = admin, 1 = I/O                */
     u16                     depth;      /* number of ring slots              */
     BOOL                    sqe_128b;   /* TRUE when this queue uses 128-byte
@@ -91,8 +92,15 @@ void nvme_teardown_queue(struct nvme_queue *q);
  * Completion drain and watchdog tick — both called from the unit task's
  * Wait()-loop.
  */
-void nvme_process_completions(struct NVMeController *ctrl);
+u32 nvme_process_completions(struct NVMeController *ctrl); /* returns I/O CQEs drained */
 void nvme_tick_watchdog(struct NVMeController *ctrl);
+
+/*
+ * Is a fresh CQE waiting at @q's head?  The interrupt server's "was this
+ * interrupt mine?" test on a shared INTx line — see nvme_int_isr.  Called at
+ * interrupt level; invalidates one cache line, touches nothing else.
+ */
+BOOL nvme_cq_pending(struct nvme_queue *q);
 
 /*
  * SQ-tail doorbell batching (mirrors Linux nvme_write_sq_db / commit_rqs).

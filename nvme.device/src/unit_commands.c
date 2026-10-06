@@ -3,7 +3,7 @@
 #include <clib/exec_protos.h>
 #else
 #define __NOLIBBASE__
-#define EXEC_BASE_NAME (*(struct ExecBase **)4UL)
+#define EXEC_BASE_NAME SysBase /* a local in every function, from its context's sysBase */
 #include <proto/exec.h>
 #endif
 
@@ -24,6 +24,7 @@
  */
 static inline void reply_io(struct IOStdReq *io, BYTE error)
 {
+    struct ExecBase *SysBase = ((struct NVMeUnit *)io->io_Unit)->sysBase;
     KprintfT("[nvme] reply_io: cmd=0x%04lx unit=%ld error=%ld io_Actual=%lu\n",
              (ULONG)io->io_Command, ((struct NVMeUnit *)io->io_Unit)->unitNumber,
              error, io->io_Actual);
@@ -62,6 +63,7 @@ static inline u64 decode_lba(ULONG io_actual, ULONG io_offset, UWORD blockShift)
 void ProcessCommand(struct IOStdReq *io)
 {
     struct NVMeUnit *unit = (struct NVMeUnit *)io->io_Unit;
+    struct ExecBase *SysBase = unit->sysBase;
 
     /* Race-close: a BeginIO that passed its NVME_UNIT_DEAD check, was
      * PutMsg'd, and then the unit got marked dead before we picked the
