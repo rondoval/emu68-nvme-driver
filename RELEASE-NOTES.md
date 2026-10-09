@@ -1,3 +1,21 @@
+# Release notes — nvme.device 1.7
+
+Changes since v1.6.
+
+---
+
+## Bug fixes
+
+- **NTFS and exFAT partitions: the filesystems get the stack they need.**
+  `NTFileSystem3G` and `exFATFileSystem` were started with 8 KB of stack, the
+  mounter's default. They now get 64 KB, the figure recommended for
+  `NTFileSystem3G`.
+  The two values are `NVME_NTFS_STACK` and `NVME_EXFAT_STACK` in
+  `nvme.device/include/config.h`. Filesystems that come from an RDB or from
+  `FileSystem.resource` bring their own stack and are not affected.
+
+---
+
 # Release notes — nvme.device 1.6
 
 Changes since v1.5.

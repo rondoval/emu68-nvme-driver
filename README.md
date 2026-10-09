@@ -113,8 +113,8 @@ class. Every probed namespace is scanned when the driver initializes:
   than mounted dead. Unrecognized boot sectors are skipped. A partition flagged active is
   registered at boot priority 0, others at -1 — the same rule the RDB path follows.
 
-The recipes driving the second case — dostype, handler file, DOS name, buffer count, MaxTransfer —
-are `NVME_*` constants in [`nvme.device/include/config.h`](nvme.device/include/config.h), so a build
+The recipes driving the second case — dostype, handler file, DOS name, buffer count, MaxTransfer,
+handler stack — are `NVME_*` constants in [`nvme.device/include/config.h`](nvme.device/include/config.h), so a build
 can retarget them at a different filesystem.
 
 ### Getting the driver loaded

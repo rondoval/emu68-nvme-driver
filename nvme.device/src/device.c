@@ -208,6 +208,7 @@ static const struct MountFS ntfsRecipe = {
     .dosName = (const UBYTE *)NVME_LEGACY_DOSNAME,
     .buffers = NVME_LEGACY_BUFFERS,
     .maxTransfer = NVME_LEGACY_MAXTRANSFER,
+    .stackSize = NVME_NTFS_STACK,
 };
 
 /* exFATFileSystem sizes its own cache and ignores de_NumBuffers, de_MaxTransfer
@@ -221,6 +222,7 @@ static const struct MountFS exfatRecipe = {
     .dosName = (const UBYTE *)NVME_LEGACY_DOSNAME,
     .buffers = NVME_LEGACY_BUFFERS,
     .maxTransfer = NVME_LEGACY_MAXTRANSFER,
+    .stackSize = NVME_EXFAT_STACK,
 };
 
 /* Mount every probed namespace: RDB partitions plus MBR/GPT/superfloppy

@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(emu68-nvme-driver VERSION 1.6)
+project(emu68-nvme-driver VERSION 1.7)
 
 string(TIMESTAMP CURRENT_DATE "(%d.%m.%Y)")
 if(EMU68_BUILD_STAMP)   # local-build marker from the stack's build.sh; empty in releases
