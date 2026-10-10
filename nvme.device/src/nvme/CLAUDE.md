@@ -8,7 +8,7 @@ Guidance for Claude Code when working in the `nvme.device` driver source.
 
 Exec units map 1:1 to NVMe **namespaces** — a two-namespace drive is two units sharing one controller.
 
-Port history, the `pci.c` harvest inventory, and the open backlog: [`README-internal.md`](README-internal.md) (local only, gitignored — not shipped). User-facing docs: [`README.md`](../../../README.md), [`README-nvmeadm.md`](../../../README-nvmeadm.md), [`RELEASE-NOTES.md`](../../../RELEASE-NOTES.md).
+The `pci.c` harvest inventory and the open backlog: [`README-internal.md`](README-internal.md) (local only, gitignored — not shipped). User-facing docs: [`README.md`](../../../README.md), [`README-nvmeadm.md`](../../../README-nvmeadm.md), [`RELEASE-NOTES.md`](../../../RELEASE-NOTES.md).
 
 ## Build
 
