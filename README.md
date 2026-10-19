@@ -100,8 +100,8 @@ driver. See [Getting the driver loaded](#getting-the-driver-loaded).
 ### Automount
 
 Automount and autoboot use the [`mounter`](https://github.com/rondoval/mounter) submodule (branch
-`poseidon-fixes`, a fork of the A4091 project's mounter), shared with the Poseidon USB mass-storage
-class. Every probed namespace is scanned when the driver initializes:
+`neptune-fixes`, a fork of the A4091 project's mounter), shared with the Neptune USB stack's
+mass-storage class. Every probed namespace is scanned when the driver initializes:
 
 - **RDB** partitions mount with the filesystem, handler, DOS name and environment (MaxTransfer,
   Mask, Buffers, …) their RDB carries, and boot by RDB boot priority. Only a name that collides
