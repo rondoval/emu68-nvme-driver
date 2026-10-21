@@ -329,6 +329,8 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
     {
         Kprintf("[nvme] %s: failed to open support libraries\n", __func__);
         io->io_Error = IOERR_OPENFAIL;
+        io->io_Device = NULL; /* a CloseDevice() after the failed open must not reach closeLib */
+        io->io_Unit = NULL;
         return;
     }
 
@@ -357,6 +359,8 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
     if (unit == NULL)
     {
         io->io_Error = IOERR_OPENFAIL;
+        io->io_Device = NULL; /* a CloseDevice() after the failed open must not reach closeLib */
+        io->io_Unit = NULL;
         return;
     }
     KprintfT("[nvme] %s: found unit %ld, opening\n", __func__, unitNumber);
@@ -375,6 +379,8 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
     {
         Kprintf("[nvme] %s: UnitOpen failed (%ld)\n", __func__, result);
         io->io_Error = IOERR_OPENFAIL;
+        io->io_Device = NULL; /* a CloseDevice() after the failed open must not reach closeLib */
+        io->io_Unit = NULL;
     }
 }
 
