@@ -13,6 +13,21 @@ Changes since v1.6.
   The two values are `NVME_NTFS_STACK` and `NVME_EXFAT_STACK` in
   `nvme.device/include/config.h`. Filesystems that come from an RDB or from
   `FileSystem.resource` bring their own stack and are not affected.
+- **A program that calls `CloseDevice()` after a failed `OpenDevice()` no
+  longer upsets the driver.** A failed open now clears the request's device
+  and unit, so that close does nothing, as Exec expects; before, it reached
+  the driver's close and dropped an open count it had never taken.
+
+---
+
+## Build & tooling
+
+- The `mounter` submodule follows the `neptune-fixes` branch of
+  `rondoval/mounter`.
+- `find_package()` names the oldest version of each dependency the driver
+  builds against: emu68-common 2.0, bcmpcie.library 2.3 (for
+  `libraries/pci_irq.h`). An older one now fails at configure instead of
+  mid-build.
 
 ---
 
