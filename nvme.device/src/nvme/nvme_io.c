@@ -320,7 +320,8 @@ static BYTE nvme_setup_rw(struct nvme_request *req, u64 lba, ULONG count,
 
     void *dma_buf = buffer;
 
-    if (buffer && bytes && nvme_needs_bounce(&req->ac->dma_ctx, buffer, bytes))
+    if (buffer && bytes &&
+        nvme_needs_bounce(&req->ac->dma_ctx, buffer, bytes, opcode == nvme_cmd_write))
     {
         /* Allocate a Fast-RAM bounce.  Write commands need user data
          * copied in before submit; read commands fill the bounce and
@@ -878,6 +879,9 @@ void nvme_io_context_finish(struct nvme_io_context *ctx)
              (ULONG)io, (LONG)err, (ULONG)io->io_Actual, (ULONG)ctx);
 
     ReplyMsg((struct Message *)io);
+#ifdef PROFILE
+    ctrl->reply_stamp = get_time() | 1;
+#endif
     slab_free(&ctrl->ctx_slab, ctx);
 }
 
@@ -982,7 +986,7 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
      * contiguous user buffer in ONE call here instead of once per 128 KB chunk.
      * Siblings then skip their per-chunk data flush, and the post-DMA invalidate
      * is done once in nvme_io_context_finish. */
-    if (!nvme_needs_bounce(&ctrl->dma_ctx, buffer, (ULONG)bytes))
+    if (!nvme_needs_bounce(&ctrl->dma_ctx, buffer, (ULONG)bytes, opcode == nvme_cmd_write))
     {
         /* NoSync: the first chunk's SQE flush closes the barrier before any
          * doorbell; if the pump never submits, nothing was armed */

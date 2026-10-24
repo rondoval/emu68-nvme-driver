@@ -211,11 +211,10 @@ static const struct MountFS ntfsRecipe = {
     .stackSize = NVME_NTFS_STACK,
 };
 
-/* exFATFileSystem sizes its own cache and ignores de_NumBuffers, de_MaxTransfer
- * and de_Mask; the values are kept for uniformity with the other two.  Ignoring
- * de_Mask means its buffers can land unaligned and take the driver's bounce
- * path — correct, just not zero-copy.  A drive with no exFATFileSystem in L: is
- * skipped by the mounter's own availability check, exactly as before. */
+/* exFATFileSystem sizes its own cache and ignores de_NumBuffers and
+ * de_MaxTransfer; the values are kept for uniformity with the other two.  A
+ * drive with no exFATFileSystem in L: is skipped by the mounter's own
+ * availability check, exactly as before. */
 static const struct MountFS exfatRecipe = {
     .dosType = NVME_EXFAT_DOSTYPE,
     .handler = (const UBYTE *)NVME_EXFAT_HANDLER,
@@ -262,7 +261,8 @@ static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase)
                 [MOUNTFS_NTFS]  = &ntfsRecipe,
                 [MOUNTFS_EXFAT] = &exfatRecipe,
             },
-            .dmaAlign = DMA_ALIGN_MIN, /* recipe FS buffers never take the bounce path */
+            .dmaAlign = DMA_ALIGN_MIN, /* recipe FS buffers go to Fast RAM; misaligned ones
+                                          take the driver's bounce path */
         };
 
         LONG mounted = MountDrive(&ms, NULL);

@@ -101,12 +101,23 @@ static void nvme_drain_msgport(struct NVMeController *ctrl)
     struct IOStdReq *io;
     while ((io = (struct IOStdReq *)GetMsg(ctrl->msgPort)))
     {
+#ifdef PROFILE
+        if (ctrl->reply_stamp != 0)
+        {
+            PERF_ADD(&ctrl->perf, NP_CLIENT, ctrl->reply_stamp);
+            ctrl->reply_stamp = 0;
+        }
+#endif
         if (io->io_Command != CMD_INTERNAL_ABORT_REQUEST &&
             (ctrl->io_q.inflight_count >= ctrl->io_max_inflight ||
              !IsListEmpty(pending)))
             AddTail(pending, (struct Node *)io);
         else
+        {
+            PERF_T0(t_dispatch);
             ProcessCommand(io);
+            PERF_ADD(&ctrl->perf, NP_DISPATCH, t_dispatch);
+        }
     }
 
     nvme_sq_batch_end(&ctrl->io_q);
