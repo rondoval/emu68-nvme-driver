@@ -208,11 +208,13 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
      * for the small admin transfers passthrough sees. */
     void *bounce = NULL;
     void *dma_buf = uc->pt_Addr;
-    /* Unlike block I/O, pt_DataLen is arbitrary, so a 64-aligned start with a
-     * non-64 length still shares its tail cache line — bounce that case too
-     * (the bounce is cache-line aligned and dma_alloc pads its size). */
+    /* The direction isn't decoded, so the read rule applies.  Unlike block
+     * I/O, pt_DataLen is arbitrary, so a 64-aligned start with a non-64
+     * length still shares its tail cache line — bounce that case too (the
+     * bounce is cache-line aligned and dma_alloc pads its size). */
     if (dma_buf && uc->pt_DataLen &&
-        (nvme_needs_bounce(&ctrl->dma_ctx, dma_buf, uc->pt_DataLen) || (uc->pt_DataLen & DMA_ALIGN_MIN_MASK)))
+        (nvme_needs_bounce(&ctrl->dma_ctx, dma_buf, uc->pt_DataLen, FALSE) ||
+         (uc->pt_DataLen & DMA_ALIGN_MIN_MASK)))
     {
         bounce = dma_alloc(ctrl->dmaPool, DMA_ALIGN_MIN, uc->pt_DataLen);
         if (!bounce)

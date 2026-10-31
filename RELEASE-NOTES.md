@@ -1,3 +1,52 @@
+# Release notes — nvme.device 1.7
+
+Changes since v1.6.
+
+---
+
+## Improvements
+
+- **Writes from buffers that are not cache-line aligned are no longer
+  copied.** Such buffers (most plain `AllocMem()` ones) now go to the drive
+  directly; only unreachable or non-longword-aligned buffers still bounce.
+  1 MB writes through PFS3 from such a buffer: 266 → 311 MB/s, the same as
+  aligned. Reads still bounce, to keep a neighbour's data in a shared cache
+  line safe.
+
+---
+
+## Bug fixes
+
+- **NTFS and exFAT partitions: the filesystems get the stack they need.**
+  `NTFileSystem3G` and `exFATFileSystem` were started with 8 KB of stack, the
+  mounter's default. They now get 64 KB, the figure recommended for
+  `NTFileSystem3G`.
+  The two values are `NVME_NTFS_STACK` and `NVME_EXFAT_STACK` in
+  `nvme.device/include/config.h`. Filesystems that come from an RDB or from
+  `FileSystem.resource` bring their own stack and are not affected.
+- **FAT, NTFS and exFAT partitions on MBR or GPT disks, and CDs, are mounted
+  with plain buffer settings.** No more `MEMF_CLEAR` in `de_BufMemType`, and
+  `de_Mask` is `0x7FFFFFFE` instead of the 64-byte DMA alignment; both kept
+  fat95 off its direct-transfer path (6.6× faster on a USB stick, Neptune
+  GH #24). RDB partitions keep their own values.
+- **A program that calls `CloseDevice()` after a failed `OpenDevice()` no
+  longer upsets the driver.** A failed open now clears the request's device
+  and unit, so that close does nothing, as Exec expects; before, it reached
+  the driver's close and dropped an open count it had never taken.
+
+---
+
+## Build & tooling
+
+- The `mounter` submodule follows the `neptune-fixes` branch of
+  `rondoval/mounter`.
+- `find_package()` names the oldest version of each dependency the driver
+  builds against: emu68-common 2.0, bcmpcie.library 2.3 (for
+  `libraries/pci_irq.h`). An older one now fails at configure instead of
+  mid-build.
+
+---
+
 # Release notes — nvme.device 1.6
 
 Changes since v1.5.

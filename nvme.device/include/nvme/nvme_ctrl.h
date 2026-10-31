@@ -12,9 +12,12 @@
  * nvme_probe.c. */
 enum NVMeProfSlot
 {
-	NP_SUBMIT, /* nvme_submit_io: SQE copy + clean (+ doorbell when unbatched) */
-	NP_DRAIN,  /* interrupt-driven I/O-CQ drain, completions and replies included */
-	NP_WAKE,   /* interrupt -> the unit task starts that drain */
+	NP_SUBMIT,   /* nvme_submit_io: SQE copy + clean (+ doorbell when unbatched) */
+	NP_DRAIN,    /* interrupt-driven I/O-CQ drain, completions and replies included */
+	NP_WAKE,     /* interrupt -> the unit task starts that drain */
+	NP_DISPATCH, /* ProcessCommand of one dequeued request; holds NP_SUBMIT */
+	NP_CMD,      /* I/O SQE written -> its completion reaped: drive, interrupt, wake */
+	NP_CLIENT,   /* I/O reply -> the next request dequeued: the caller and Exec at QD 1 */
 	NP_SLOT_COUNT
 };
 #define NVME_CQE_PER_WAKE_BOUNDS 7 /* completions one interrupt finds */
@@ -379,6 +382,7 @@ struct NVMeController
 	u32 cqe_per_wake_buckets[NVME_CQE_PER_WAKE_BOUNDS + 1];
 	struct perf_hist cqe_per_wake;
 	u32 irq_stamp;  /* ISR's get_time() | 1 for NP_WAKE; 0 = none pending */
+	u32 reply_stamp; /* last I/O reply's get_time() | 1 for NP_CLIENT; 0 = none */
 	u32 perf_ticks; /* watchdog ticks since the last report */
 };
 

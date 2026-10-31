@@ -42,7 +42,7 @@
 
 /* [nvme] perf slot names - rodata; order matches enum NVMeProfSlot. */
 static const char *const nvme_perf_names[NP_SLOT_COUNT] = {
-    "submit", "drain", "wake",
+    "submit", "drain", "wake", "dispatch", "cmd", "client",
 };
 
 /* Completions one interrupt drains: 1 = no coalescing at all. */

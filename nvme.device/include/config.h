@@ -103,6 +103,17 @@
 #define NVME_LEGACY_BUFFERS     500
 #endif
 
+/* Stack for the two handlers built on filesysbox.library.  64 KB is what is
+ * recommended for NTFileSystem3G (ntfs-3g).
+ * exFATFileSystem gets the same. */
+#ifndef NVME_NTFS_STACK
+#define NVME_NTFS_STACK         65536
+#endif
+
+#ifndef NVME_EXFAT_STACK
+#define NVME_EXFAT_STACK        65536
+#endif
+
 #ifndef NVME_LEGACY_MAXTRANSFER
 #define NVME_LEGACY_MAXTRANSFER 0x00FFFFFFu
 #endif

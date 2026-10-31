@@ -277,6 +277,9 @@ static void nvme_end_req(struct nvme_request *req)
 			req->io->io_Actual = req->io->io_Length;
 		req->io->io_Error = error;
 		ReplyMsg((struct Message *)req->io);
+#ifdef PROFILE
+		req->q->ctrl->reply_stamp = get_time() | 1;
+#endif
 	}
 }
 
@@ -311,6 +314,10 @@ void nvme_complete_rq(struct nvme_request *req)
 					   : nvme_get_admin_opcode_str(req->cmd.common.opcode),
 			 (ULONG)req->status, nvme_get_error_status_str(req->status),
 			 (ULONG)req->unit, (ULONG)req->ctx);
+#ifdef PROFILE
+	if (req->unit)
+		PERF_ADD(&req->q->ctrl->perf, NP_CMD, req->submit_us);
+#endif
 
 	switch (nvme_decide_disposition(req))
 	{
