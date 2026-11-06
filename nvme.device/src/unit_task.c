@@ -254,7 +254,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
         while ((pio = (struct IOStdReq *)RemHead((struct List *)&ctrl->io_pending)))
         {
             pio->io_Error = IOERR_ABORTED;
-            ReplyMsg((struct Message *)pio);
+            nvme_reply(ctrl->device, pio);
         }
 
         /* Likewise for parked chunked contexts: nothing is in flight for

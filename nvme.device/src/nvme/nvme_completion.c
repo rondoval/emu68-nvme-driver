@@ -276,7 +276,7 @@ static void nvme_end_req(struct nvme_request *req)
 		if (!error)
 			req->io->io_Actual = req->io->io_Length;
 		req->io->io_Error = error;
-		ReplyMsg((struct Message *)req->io);
+		nvme_reply(req->q->ctrl->device, req->io);
 #ifdef PROFILE
 		req->q->ctrl->reply_stamp = get_time() | 1;
 #endif

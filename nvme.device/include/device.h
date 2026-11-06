@@ -61,6 +61,8 @@ struct NVMeDevice
     struct MinList units;       /* flat list of NVMeUnit ordered by unitNumber */
     ULONG nextUnitNumber;       /* monotonically increasing; assigned by
                                  * nvme_alloc_nvmeunit on each NSID found */
+    struct VDrive *vd;          /* nvmevd.device, made by the first virtual drive found
+                                 * (mounter/vdrive.h); NULL until then */
 };
 
 /*
@@ -90,7 +92,17 @@ struct NVMeUnit
      * caller's iotd_Count on ETD_* commands.  Fixed media: initialised to 1 at
      * alloc so a stale iotd_Count of 0 is rejected (TDERR_DiskChanged). */
     ULONG changeCount;
+
+    /* Its record on nvmevd.device, the handle the write fence and
+     * VDriveParentGone() take (mounter/vdrive.h); set by VDriveRefresh(),
+     * NULL while it never had a virtual drive. */
+    struct VDriveParent *vdParent;
 };
+
+/* Reply a finished client request (device.c): nvmevd.device's own are completed
+ * on the spot (mounter/vdrive.h), the rest ReplyMsg()ed.  From a task only. */
+struct IOStdReq;
+void nvme_reply(struct NVMeDevice *device, struct IOStdReq *io);
 
 /* NVMeUnit flag bits.  Read by openLib / UnitOpen / beginIO / ProcessCommand;
  * written by nvme_ns_remove when the underlying namespace disappears. */
@@ -105,7 +117,7 @@ LONG abortIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6"));
 /* ------------------------------------------------------------------ */
 /* unit.c                                                              */
 /* ------------------------------------------------------------------ */
-s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags);
+s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber);
 s32 UnitClose(struct NVMeUnit *unit);
 
 /* ------------------------------------------------------------------ */

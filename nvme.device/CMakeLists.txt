@@ -32,6 +32,7 @@ add_compile_options(
 add_compile_definitions(
     PRIVATE
         DEVICE_IDSTRING="${VERSTRING}"
+        VD_IDSTRING="nvmevd.device ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR} ${CURRENT_DATE}"
         DEVICE_VERSION=${PROJECT_VERSION_MAJOR}
         DEVICE_REVISION=${PROJECT_VERSION_MINOR}
         DEVICE_NAME="${PROJECT_NAME}"
@@ -39,6 +40,7 @@ add_compile_definitions(
 )
 
 # Sources
+include(${CMAKE_CURRENT_SOURCE_DIR}/mounter/mounter.cmake)
 add_executable(nvme.device
     src/device.c
     src/device_beginio.c
@@ -64,11 +66,8 @@ add_executable(nvme.device
     src/nvme/nvme_identify.c
     src/nvme/nvme_completion.c
     src/nvme/nvme_scan.c
-    mounter/mounter.c
-    mounter/mounter_rdb.c
-    mounter/mounter_cd.c
-    mounter/mounter_legacy.c
-    mounter/bootpoint.S
+    ${MOUNTER_SOURCES}
+    ${VDRIVE_SOURCES}
 )
 
 target_include_directories(nvme.device
@@ -95,8 +94,7 @@ target_link_libraries(nvme.device
         Emu68Common::common
         Emu68PCIe::pcie_headers
         gcc                # libgcc runtime helpers for remaining 64-bit ops on m68k,
-                           # notably nvme_scan.c's u64 LBA->sector shift (__ashldi3)
-                           # and nvme_hmb.c's 64-bit ceil-divide for hmmaxd_cap (__udivdi3)
+                           # notably nvme_hmb.c's 64-bit ceil-divide for hmmaxd_cap (__udivdi3)
 )
 
 # ROM-able: no writable .data/.bss may sneak in. For the serial backend this

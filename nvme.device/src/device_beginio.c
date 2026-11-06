@@ -144,18 +144,9 @@ static void do_td_getgeometry(struct IOStdReq *io, struct NVMeUnit *unit)
         return;
     }
 
-    /* Capacity in 512-byte sectors, capped at ULONG_MAX for large drives */
-    ULONG totalSectors;
-    if (unit->blockSize == 0)
-    {
-        totalSectors = 0;
-    }
-    else
-    {
-        ULONG sectorsPerBlock = unit->blockSize >> 9; /* blockSize / 512 */
-        uint64_t total64 = unit->logicalSectors * sectorsPerBlock;
-        totalSectors = (total64 > 0xFFFFFFFFUL) ? 0xFFFFFFFFUL : (ULONG)total64;
-    }
+    /* Capacity in blocks of dg_SectorSize, capped at ULONG_MAX for large drives */
+    ULONG totalSectors = (unit->logicalSectors > 0xFFFFFFFFUL) ? 0xFFFFFFFFUL
+                                                               : (ULONG)unit->logicalSectors;
 
     dg->dg_SectorSize = (unit->blockSize != 0) ? unit->blockSize : 512;
     dg->dg_TotalSectors = totalSectors;
@@ -228,7 +219,7 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6"))
     {
         io->io_Error = TDERR_DiskChanged;
         if (!(io->io_Flags & IOF_QUICK))
-            ReplyMsg((struct Message *)io);
+            nvme_reply(unit->device, io);
         return;
     }
 
@@ -241,7 +232,7 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6"))
     {
         io->io_Error = TDERR_DiskChanged;
         if (!(io->io_Flags & IOF_QUICK))
-            ReplyMsg((struct Message *)io);
+            nvme_reply(unit->device, io);
         return;
     }
 
@@ -319,6 +310,6 @@ void beginIO(struct IOStdReq *io asm("a1"), struct NVMeDevice *base asm("a6"))
                  (ULONG)io->io_Command, unit->unitNumber, io->io_Error, io->io_Actual);
         /* Synchronous completion — reply if the caller is not WaitIO()ing */
         if (!(io->io_Flags & IOF_QUICK))
-            ReplyMsg((struct Message *)io);
+            nvme_reply(unit->device, io);
     }
 }

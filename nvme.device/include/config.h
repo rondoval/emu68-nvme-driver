@@ -19,6 +19,14 @@
 #define DEVICE_REVISION 0
 #endif
 
+/* The virtual drives' device (mounter/vdrive.h).  Its id string carries no
+ * "$VER: ": the one in this binary is nvme.device's. */
+#define VD_NAME "nvmevd.device"
+
+#ifndef VD_IDSTRING
+#define VD_IDSTRING VD_NAME
+#endif
+
 #ifndef DEVICE_USE_MSI
 #define DEVICE_USE_MSI TRUE
 #endif

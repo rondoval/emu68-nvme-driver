@@ -117,6 +117,27 @@ The recipes driving the second case — dostype, handler file, DOS name, buffer 
 handler stack — are `NVME_*` constants in [`nvme.device/include/config.h`](nvme.device/include/config.h), so a build
 can retarget them at a different filesystem.
 
+### Virtual drives
+
+An MBR partition of type `0x76` (primary or logical) or a GPT partition of Emu68's type
+`3F82EEBC-87C9-4097-8165-89D6540557C0` holds a whole RDB disk, as on Emu68's SD card. Each one,
+within the limits below, becomes a unit of a second device, `nvmevd.device`, created when the
+first is found:
+
+- **Unit numbers** are namespace unit × 10 + the partition's order among that namespace's virtual
+  drives (0–9). The first virtual drive on unit 0 is `nvmevd.device` unit 0, the second unit 1;
+  the first on unit 1 is unit 10. HDToolBox shows them as address 0–9, LUN = namespace unit.
+- **The RDB inside** mounts and boots from there, exactly as on the SD card, with its own names
+  and boot priorities. Positions count from the partition start, so a volume reads the same here
+  and under Emu68; SmartFilesystem, which checks its own position, accepts it.
+- **On the namespace**, a virtual drive's blocks are read-only: writes, Write Zeroes, TRIM and
+  SCSI WRITE/UNMAP into them fail with `TDERR_WriteProt` (DATA PROTECT in the SCSI sense). Edit it
+  through `nvmevd.device`; HDToolBox finds it with the tooltype
+  `SCSI_DEVICE_NAME=nvmevd.device`. While any namespace holds one, `nvmeadm` cannot Format,
+  Sanitize or delete a namespace.
+- Up to ten virtual drives per namespace get a unit, each at most 2^32 blocks. One past the
+  tenth, or larger, gets none and stays an ordinary, writable partition of the namespace.
+
 ### Getting the driver loaded
 
 The mount pass runs exactly once, at the moment `nvme.device` initializes. When that happens
@@ -193,6 +214,8 @@ delivers on top of that is lower and varies with the filesystem.
 - device-specific quirk handling carried over from Linux where it is relevant to this port
 - Host Memory Buffer setup for DRAM-less controllers that expose HMB capability
 - automount of RDB partitions, plus FAT, NTFS and exFAT filesystems on MBR/GPT/superfloppy disks
+- Emu68 virtual drives (an RDB disk inside a partition) as units of `nvmevd.device`, see
+  [Virtual drives](#virtual-drives)
 - can be built into a custom Kickstart ROM, so the machine can boot from an NVMe volume
 
 ### Block I/O functionality
@@ -332,3 +355,39 @@ reshaped around AmigaOS constraints:
 
 That keeps the code close enough to Linux to reuse mature NVMe logic where it helps, while still
 behaving like an AmigaOS driver package.
+
+## Licence
+
+nvme.device and its tools are under the GNU General Public License, version 2
+(see [LICENSE](LICENSE)); the per-file SPDX headers are authoritative.
+
+nvme.device links the [`mounter`](https://github.com/rondoval/mounter)
+submodule (`nvme.device/mounter`), which is under the 2-clause BSD licence (see
+its LICENSE). Its notice follows, as binaries must carry it:
+
+```text
+Copyright (c) 2021-2022, Toni Wilen
+Copyright (c) 2022-2023, Stefan Reinauer and Chris Hooper (legacy.h)
+Copyright (c) 2026, rondoval
+
+Redistribution and use in source and binary forms, with or without
+modification, are permitted provided that the following conditions are met:
+
+1. Redistributions of source code must retain the above copyright notice, this
+   list of conditions and the following disclaimer.
+
+2. Redistributions in binary form must reproduce the above copyright notice,
+   this list of conditions and the following disclaimer in the documentation
+   and/or other materials provided with the distribution.
+
+THIS SOFTWARE IS PROVIDED BY THE COPYRIGHT HOLDERS AND CONTRIBUTORS "AS IS"
+AND ANY EXPRESS OR IMPLIED WARRANTIES, INCLUDING, BUT NOT LIMITED TO, THE
+IMPLIED WARRANTIES OF MERCHANTABILITY AND FITNESS FOR A PARTICULAR PURPOSE ARE
+DISCLAIMED. IN NO EVENT SHALL THE COPYRIGHT HOLDER OR CONTRIBUTORS BE LIABLE
+FOR ANY DIRECT, INDIRECT, INCIDENTAL, SPECIAL, EXEMPLARY, OR CONSEQUENTIAL
+DAMAGES (INCLUDING, BUT NOT LIMITED TO, PROCUREMENT OF SUBSTITUTE GOODS OR
+SERVICES; LOSS OF USE, DATA, OR PROFITS; OR BUSINESS INTERRUPTION) HOWEVER
+CAUSED AND ON ANY THEORY OF LIABILITY, WHETHER IN CONTRACT, STRICT LIABILITY,
+OR TORT (INCLUDING NEGLIGENCE OR OTHERWISE) ARISING IN ANY WAY OUT OF THE USE
+OF THIS SOFTWARE, EVEN IF ADVISED OF THE POSSIBILITY OF SUCH DAMAGE.
+```

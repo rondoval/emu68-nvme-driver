@@ -24,12 +24,11 @@
  */
 static inline void reply_io(struct IOStdReq *io, BYTE error)
 {
-    struct ExecBase *SysBase = ((struct NVMeUnit *)io->io_Unit)->sysBase;
     KprintfT("[nvme] reply_io: cmd=0x%04lx unit=%ld error=%ld io_Actual=%lu\n",
              (ULONG)io->io_Command, ((struct NVMeUnit *)io->io_Unit)->unitNumber,
              error, io->io_Actual);
     io->io_Error = error;
-    ReplyMsg((struct Message *)io);
+    nvme_reply(((struct NVMeUnit *)io->io_Unit)->device, io);
 }
 
 /*
@@ -72,7 +71,7 @@ void ProcessCommand(struct IOStdReq *io)
     if (unit->flags & NVME_UNIT_DEAD)
     {
         io->io_Error = TDERR_DiskChanged;
-        ReplyMsg((struct Message *)io);
+        nvme_reply(unit->device, io);
         return;
     }
 

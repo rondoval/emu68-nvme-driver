@@ -24,7 +24,7 @@ struct nvme_ns {
 	struct ExecBase *sysBase; /* ctrl->sysBase, copied at alloc */
 	u32 ns_id;
 	u8 lba_shift;
-	u64 disk_capacity_sectors;
+	u64 capacity_blocks;	/* in logical blocks of 1 << lba_shift */
 	struct NVMeUnit *unit;
 
 	/* metadata / end-to-end-protection characteristics of the active LBA

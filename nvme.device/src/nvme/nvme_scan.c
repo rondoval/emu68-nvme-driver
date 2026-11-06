@@ -13,27 +13,13 @@
 
 #include <nvme/nvme_core.h> /* must come first: device.h pulls in kcompat.h */
 #include <device.h>			/* struct NVMeUnit, NVME_UNIT_DEAD */
+#include <vdrive.h>			/* VDriveParentGone */
 #include <nvme/nvme_admin.h>
 #include <nvme/nvme_ctrl.h>		/* nvme_change_ctrl_state, nvme_init_non_mdts_limits */
 #include <nvme/nvme_identify.h> /* struct nvme_ns_info, nvme_identify_* */
 #include <nvme/nvme_probe.h>	/* nvme_alloc_nvmeunit */
 #include <nvme/nvme_queue.h>	/* nvme_unquiesce_io_queues */
 #include <nvme/nvme_scan.h>
-
-/*
- * nvme_lba_to_sect - convert a device LBA to a 512-byte sector number
- *
- * Shifts left by (lba_shift - SECTOR_SHIFT) to produce the kernel sector
- * number corresponding to a given device LBA.
- *
- * @ns:  namespace whose lba_shift defines the conversion
- * @lba:  device logical block address
- * Returns: kernel sector number (512 B units)
- */
-static inline u64 nvme_lba_to_sect(struct nvme_ns *ns, u64 lba)
-{
-	return lba << (ns->lba_shift - SECTOR_SHIFT);
-}
 
 /*
  * nvme_find_ns - return the controller's nvme_ns for @nsid, or NULL.
@@ -151,7 +137,7 @@ static void nvme_update_ns_info(struct nvme_ns *ns, struct nvme_ns_info *info)
 
 	if (info->ms == 0 && info->pi_type == 0 &&
 		ns->lba_shift >= 9 && ns->lba_shift <= 12)
-		ns->disk_capacity_sectors = nvme_lba_to_sect(ns, info->nsze);
+		ns->capacity_blocks = info->nsze;
 	else
 		Kprintf("[nvme] %s: nsid %lu not a plain block ns "
 				"(ms=%lu pi=%lu ds=%lu) - no block I/O\n",
@@ -206,7 +192,7 @@ static void nvme_alloc_ns(struct NVMeController *ctrl, struct nvme_ns_info *info
 	ns->unit = nvme_alloc_nvmeunit(ctrl, ns->ns_id,
 								   1u << ns->lba_shift,
 								   ns->lba_shift,
-								   ns->disk_capacity_sectors,
+								   ns->capacity_blocks,
 								   info->deac ? NVME_NS_DEAC : 0);
 
 	AddTail((struct List *)&ctrl->namespaces, (struct Node *)&ns->mn_Node);
@@ -239,6 +225,7 @@ static void nvme_ns_remove(struct nvme_ns *ns)
 	{
 		struct NVMeUnit *unit = ns->unit;
 		ns->unit = NULL;
+		VDriveParentGone(unit->vdParent);
 		Forbid();
 		unit->flags |= NVME_UNIT_DEAD; /* publish dead BEFORE unlink */
 		Remove((struct Node *)unit);   /* off base->units */
