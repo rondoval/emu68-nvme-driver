@@ -33,7 +33,7 @@ Changes since v1.7.
 
 ## Build & tooling
 
-- The `mounter` submodule moves to its v1.1: virtual drives and the fixes above. Its BSD
+- The `mounter` submodule moves to its v1.2: virtual drives and the fixes above. Its BSD
   licence notice is in the README, as binaries must carry it.
 - CMake takes the mounter's source list from the submodule (`mounter.cmake`).
 
