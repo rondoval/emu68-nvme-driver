@@ -64,8 +64,12 @@
 
 /* Admin queue size (entries, must be power of 2, NVMe spec max 4096) */
 #define NVME_ADMIN_QUEUE_SIZE   64
-/* I/O queue size (entries, must be power of 2) */
+/* I/O queue depth asked for (entries). A controller whose CAP.MQES allows
+ * fewer gets MQES + 1 instead (nvme_set_io_queue_depth); the ring code takes
+ * any depth. */
 #define NVME_IO_QUEUE_SIZE      256
+/* Smallest queue the NVMe spec allows: CAP.MQES is at least 1h, two entries. */
+#define NVME_MIN_IO_QUEUE_SIZE  2
 
 /* Maximum active namespaces per controller.
  * NVMe spec §5.15.4: Identify Active NSID List returns up to 1024 NSIDs. */

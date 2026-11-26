@@ -244,6 +244,32 @@ static int nvme_init_ctrl_finish(struct NVMeController *ctrl, BOOL was_suspended
  * Returns: 0 on success, -ENODEV if page size incompatible or timeout,
  *          negative errno on register read/write failure
  */
+/*
+ * nvme_set_io_queue_depth - size the I/O queue from CAP.MQES
+ *
+ * The queue holds NVME_IO_QUEUE_SIZE entries unless the controller allows
+ * fewer: CAP.MQES is the largest queue it accepts, 0's based (NVMe Base 2.1
+ * §3.1.4.1), and a larger Create I/O CQ or SQ fails with Invalid Queue Size.
+ * The 0's based depth goes to ctrl->sqsize, which both queue setup paths read.
+ * The floor is the spec's minimum, for a controller that reports MQES 0.
+ *
+ * @ctrl: controller whose CAP has just been read
+ */
+static void nvme_set_io_queue_depth(struct NVMeController *ctrl)
+{
+    u32 depth = NVME_CAP_MQES(ctrl->cap) + 1U;
+
+    if (depth > NVME_IO_QUEUE_SIZE)
+        depth = NVME_IO_QUEUE_SIZE;
+    if (depth < NVME_MIN_IO_QUEUE_SIZE)
+        depth = NVME_MIN_IO_QUEUE_SIZE;
+    ctrl->sqsize = (u16)(depth - 1U);
+
+    if (depth < NVME_IO_QUEUE_SIZE)
+        Kprintf("[nvme] %s: CAP.MQES=%lu, I/O queue depth limited to %lu\n",
+                __func__, (ULONG)NVME_CAP_MQES(ctrl->cap), (ULONG)depth);
+}
+
 static int nvme_enable_ctrl(struct NVMeController *ctrl)
 {
     ctrl->cap = nvme_reg_read64(ctrl, NVME_REG_CAP);
@@ -277,6 +303,7 @@ static int nvme_enable_ctrl(struct NVMeController *ctrl)
 
     /* CAP value may change after initial CC write */
     ctrl->cap = nvme_reg_read64(ctrl, NVME_REG_CAP);
+    nvme_set_io_queue_depth(ctrl);
 
     u32 timeout = NVME_CAP_TIMEOUT(ctrl->cap);
     if (ctrl->cap & NVME_CAP_CRMS_CRWMS)

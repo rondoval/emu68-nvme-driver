@@ -17,6 +17,9 @@ Changes since v1.7.
 
 ## Bug fixes
 
+- **Drives with a short command queue work,** such as the Kioxia BG4. Every drive was asked
+  for a 256-entry queue, and one that allows fewer refused it and stayed unused; the queue
+  now takes the drive's own limit. Contributed by mgerstma.
 - **Namespaces with 4 KiB sectors report their real size.** Partitioning tools were shown
   8 times (SCSI) or 64 times (trackdisk geometry) the capacity.
 - **One program could make a unit unusable.** Opening `nvme.device` with flag bit 0 set
