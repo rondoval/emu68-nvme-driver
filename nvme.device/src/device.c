@@ -394,10 +394,63 @@ static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase)
     FreeMem(units, bytes);
 }
 
-/* reset_guard prepare callback (interrupt-safe). */
+/*
+ * nvme_device_reset_prepare - reset_guard prepare: the ColdReboot path only
+ * (the keyboard path is deferred, nvme_device_reset_defer).
+ *
+ * From an ordinary task, as C:Reboot calls it, each controller gets the
+ * keyboard path's shutdown, Host Memory Buffer released first.
+ * The release is an admin command submitted and waited for from the calling task,
+ * which nvme allows from any task but the unit task.  From an interrupt,
+ * inside Disable() or on a unit task, only the interrupt-safe CC.SHN handshake
+ * runs.
+ */
 static void nvme_device_reset_prepare(APTR user)
 {
-    nvme_reset_quiesce_all(user);
+    struct NVMeDevice *base = user;
+
+    nvme_reset_prepare_all(base, reset_guard_can_wait(&base->resetGuard));
+}
+
+/*
+ * nvme_device_reset_defer - reset_guard defer callback: Ctrl-Amiga-Amiga.
+ *
+ * Interrupt context, called from the keyboard reset handler.  Nothing is
+ * shut down here: the filesystems on our units still have to write their
+ * pending data, from their own tasks, after their own handlers ran.  The
+ * unit tasks see resetWarned on their next tick and drain
+ * (nvme_reset_warn_tick); the last controller to shut down reports done.
+ * With no controller there is nothing to wait for.
+ */
+static void nvme_device_reset_defer(APTR user)
+{
+    struct NVMeDevice *base = user;
+    UWORD controllers = 0;
+
+    for (struct MinNode *node = base->controllers.mlh_Head; node->mln_Succ != NULL; node = node->mln_Succ)
+        controllers++;
+    base->resetPendingCtrls = controllers;
+    base->resetWarned = 1;
+
+    if (controllers == 0)
+        reset_guard_done(&base->resetGuard);
+}
+
+/*
+ * nvme_device_reset_ctrl_done - one controller has shut down after the
+ * warning (AdminWorker); the last one tells keyboard.device we are done.
+ */
+void nvme_device_reset_ctrl_done(struct NVMeDevice *base)
+{
+    struct ExecBase *SysBase = base->sysBase;
+    BOOL last;
+
+    Forbid();
+    last = base->resetPendingCtrls > 0 && --base->resetPendingCtrls == 0;
+    Permit();
+
+    if (last)
+        reset_guard_done(&base->resetGuard);
 }
 
 APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *SysBase asm("a6"))
@@ -418,8 +471,12 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
     base->utilityBase = NULL;
     base->pcieBase = NULL;
 
-    if (!reset_guard_install(&base->resetGuard, SysBase, nvme_device_reset_prepare, base,
-                             (CONST_STRPTR) "nvme.device"))
+    base->resetWarned = 0;
+    base->resetPendingCtrls = 0;
+    if (reset_guard_install(&base->resetGuard, SysBase, nvme_device_reset_prepare, base,
+                            (CONST_STRPTR) "nvme.device"))
+        reset_guard_set_defer(&base->resetGuard, nvme_device_reset_defer);
+    else
         Kprintf("[nvme] %s: reset guard install failed\n", __func__);
 
     return base;

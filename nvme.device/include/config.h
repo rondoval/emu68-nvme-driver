@@ -71,6 +71,18 @@
 /* Smallest queue the NVMe spec allows: CAP.MQES is at least 1h, two entries. */
 #define NVME_MIN_IO_QUEUE_SIZE  2
 
+/* Ctrl-Amiga-Amiga (deferred reset_guard path, nvme_reset_warn_tick): after the
+ * warning the filesystems still flush through us; a controller shuts down once its
+ * I/O has been idle this long, or this long after the warning at the latest. The
+ * keyboard resets the machine 10 s after the warning whatever happens. */
+#define NVME_RESET_IDLE_MS      500
+#define NVME_RESET_DEADLINE_MS  7000
+/* CC.SHN wait on the reset paths, whatever RTD3E says: deferred (after the Host
+ * Memory Buffer is released, which makes shutdown fast) and inline (ColdReboot,
+ * within reset_guard's per-driver budget). */
+#define NVME_RESET_SHUTDOWN_S   2
+#define NVME_INLINE_SHUTDOWN_S  5
+
 /* Maximum active namespaces per controller.
  * NVMe spec §5.15.4: Identify Active NSID List returns up to 1024 NSIDs. */
 #define NVME_MAX_NS             1024

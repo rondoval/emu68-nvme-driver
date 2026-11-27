@@ -245,6 +245,14 @@ enum nvme_ctrl_state
 	NVME_CTRL_DEAD,
 };
 
+/* Ctrl-Amiga-Amiga drain of one controller (ctrl->reset_phase). */
+enum nvme_reset_phase
+{
+	NVME_RESET_NONE,     /* no warning seen */
+	NVME_RESET_DRAINING, /* serving the filesystems' last I/O until idle */
+	NVME_RESET_SHUTDOWN, /* AdminWorker asked to shut the controller down */
+};
+
 enum nvme_ctrl_flags
 {
 	NVME_CTRL_ADMIN_Q_STOPPED = 0,
@@ -302,7 +310,15 @@ struct NVMeController
 	struct Task *admin_task; /* AdminWorker handling blocking admin operations. */
 	BYTE scan_signal; /* Signal bit requesting namespace rescan work. */
 	BYTE fw_act_signal; /* Signal bit requesting firmware-activation follow-up. */
+	BYTE shutdown_signal; /* Signal bit: AdminWorker shuts down for Ctrl-Amiga-Amiga. */
 	struct MsgPort *adminPort; /* Passthrough and admin-only request port. */
+
+	/* Ctrl-Amiga-Amiga drain (nvme_reset_warn_tick, unit task only). */
+	u8 reset_phase; /* enum nvme_reset_phase: none, draining, shutting down */
+	u16 reset_ticks; /* unit-task ticks since the warning was seen */
+	u16 reset_idle_ticks; /* consecutive ticks with no I/O */
+	u32 reset_activity; /* io_activity at the previous tick */
+	u32 io_activity; /* bumped for every request the unit task takes from msgPort */
 
 	/* Shared allocation state. */
 	struct dma_mem_ctx dma_ctx; /* Emu68 (DMA-reachable) RAM regions; backs dmaPool */

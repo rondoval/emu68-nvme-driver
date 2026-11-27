@@ -55,6 +55,10 @@ struct NVMeDevice
     struct Library *utilityBase;
     struct Library *pcieBase;
     struct reset_guard resetGuard; /* pre-reset DMA quiesce + SHN hooks */
+    volatile UBYTE resetWarned; /* Ctrl-Amiga-Amiga seen: the unit tasks drain, then
+                                 * AdminWorker shuts each controller down */
+    volatile UWORD resetPendingCtrls; /* controllers still to shut down after the warning;
+                                       * the last one reports done (reset_guard_done) */
 
     BOOL probed;                /* TRUE after nvme_probe_all() has run */
     struct MinList controllers; /* list of NVMeController */
@@ -129,6 +133,11 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent);
 /* admin_task.c                                                        */
 /* ------------------------------------------------------------------ */
 void AdminWorker(struct NVMeController *ctrl, struct Task *parent);
+
+/* ------------------------------------------------------------------ */
+/* device.c — Ctrl-Amiga-Amiga bookkeeping                             */
+/* ------------------------------------------------------------------ */
+void nvme_device_reset_ctrl_done(struct NVMeDevice *base);
 
 /* ------------------------------------------------------------------ */
 /* unit_commands.c                                                     */

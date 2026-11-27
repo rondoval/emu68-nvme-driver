@@ -100,10 +100,16 @@ static s32 hw_init(struct NVMeController *ctrl)
     return ERR_NO_ERROR;
 }
 
-static void hw_shutdown(struct NVMeController *ctrl)
+/*
+ * hw_release - undo hw_init(): give up ownership of the PCIe board and
+ * forget BAR0.  The controller itself is left as it is.
+ *
+ * @ctrl: the controller
+ */
+static void hw_release(struct NVMeController *ctrl)
 {
     struct Library *pcielibBase = ctrl->device->pcieBase;
-    KprintfT("[nvme] hw_shutdown: ctrl=%lx pd=%lx\n",
+    KprintfT("[nvme] hw_release: ctrl=%lx pd=%lx\n",
              (ULONG)ctrl, (ULONG)ctrl->pci_dev);
     if (pcielibBase && ctrl->pci_dev)
         SetBoardAttrs(ctrl->pci_dev, PRM_BoardOwner, 0UL, TAG_DONE);
@@ -119,8 +125,8 @@ static void hw_shutdown(struct NVMeController *ctrl)
  *
  * Spins reading NVME_REG_CSTS at 1 ms intervals until (csts & mask) == val,
  * the @timeout expires, or the register reads all-Fs (device removed).
- * Used by nvme_enable_ctrl() to wait for CSTS.RDY=1 and nvme_disable_ctrl()
- * to wait for shutdown completion.
+ * Used by nvme_enable_ctrl() and nvme_disable_ctrl() to wait for CSTS.RDY,
+ * and by nvme_shutdown_ctrl() to wait for shutdown completion.
  *
  * @ctrl:    controller to poll
  * @mask:    bit mask to apply to CSTS before comparison
@@ -232,19 +238,6 @@ static int nvme_init_ctrl_finish(struct NVMeController *ctrl, BOOL was_suspended
 }
 
 /*
- * nvme_enable_ctrl - configure and enable an NVMe controller
- *
- * Reads CAP, validates the host page size is within the device's supported
- * range, selects the command set (CSI or NVM-only), sets CC fields (page
- * size, arbitration, entry sizes), writes CC.EN=1, then waits for CSTS.RDY.
- * Reads CRTO if the controller supports it to use the correct ready timeout.
- * Called at the start of each controller initialization or reset recovery.
- *
- * @ctrl: controller to enable
- * Returns: 0 on success, -ENODEV if page size incompatible or timeout,
- *          negative errno on register read/write failure
- */
-/*
  * nvme_set_io_queue_depth - size the I/O queue from CAP.MQES
  *
  * The queue holds NVME_IO_QUEUE_SIZE entries unless the controller allows
@@ -270,6 +263,19 @@ static void nvme_set_io_queue_depth(struct NVMeController *ctrl)
                 __func__, (ULONG)NVME_CAP_MQES(ctrl->cap), (ULONG)depth);
 }
 
+/*
+ * nvme_enable_ctrl - configure and enable an NVMe controller
+ *
+ * Reads CAP, validates the host page size is within the device's supported
+ * range, selects the command set (CSI or NVM-only), sets CC fields (page
+ * size, arbitration, entry sizes), writes CC.EN=1, then waits for CSTS.RDY.
+ * Reads CRTO if the controller supports it to use the correct ready timeout.
+ * Called at the start of each controller initialization or reset recovery.
+ *
+ * @ctrl: controller to enable
+ * Returns: 0 on success, -ENODEV if page size incompatible or timeout,
+ *          negative errno on register read/write failure
+ */
 static int nvme_enable_ctrl(struct NVMeController *ctrl)
 {
     ctrl->cap = nvme_reg_read64(ctrl, NVME_REG_CAP);
@@ -333,41 +339,51 @@ static int nvme_enable_ctrl(struct NVMeController *ctrl)
 }
 
 /*
- * nvme_disable_ctrl - disable a controller or initiate a shutdown
+ * nvme_shutdown_ctrl - CC.SHN = normal, then wait for CSTS.SHST complete.
  *
- * Clears CC.EN (or sets CC.SHN for a clean shutdown) and waits for the
- * controller to acknowledge via CSTS.RDY or CSTS.SHST.  For reset (not
- * shutdown), applies the DELAY_BEFORE_CHK_RDY quirk if needed.  Called
- * during controller reset, shutdown, and removal.
+ * @ctrl:      controller to shut down
+ * @timeout_s: how long to wait: the drive's own budget (ctrl->shutdown_timeout,
+ *             from RTD3E) on removal; a reset path's budget before a reset
+ *             that happens regardless
+ * Returns: 0 on success, -ENODEV if the controller does not finish in time
+ */
+static int nvme_shutdown_ctrl(struct NVMeController *ctrl, u32 timeout_s)
+{
+    ctrl->ctrl_config &= ~(u32)NVME_CC_SHN_MASK;
+    ctrl->ctrl_config |= NVME_CC_SHN_NORMAL;
+
+    KprintfT("[nvme] shutdown_ctrl: writing CC=%08lx, waiting up to %lu s\n",
+             ctrl->ctrl_config, (ULONG)timeout_s);
+    nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
+    return nvme_wait_ready(ctrl, NVME_CSTS_SHST_MASK, NVME_CSTS_SHST_CMPLT,
+                           timeout_s, "shutdown");
+}
+
+/*
+ * nvme_disable_ctrl - reset a controller: CC.EN = 0, then wait for CSTS.RDY = 0
  *
- * @ctrl:     controller to disable
- * @shutdown: TRUE for a clean NVM Subsystem shutdown, FALSE for a bare reset
+ * Applies the DELAY_BEFORE_CHK_RDY quirk if needed.  Called at bring-up,
+ * on a failed enable and by a controller reset; a clean shutdown is
+ * nvme_shutdown_ctrl().
+ *
+ * @ctrl: controller to disable
  * Returns: 0 on success, -ENODEV if the controller does not respond
  */
-static int nvme_disable_ctrl(struct NVMeController *ctrl, BOOL shutdown)
+static int nvme_disable_ctrl(struct NVMeController *ctrl)
 {
 #ifdef TRACE
     u32 csts_before = nvme_reg_read32(ctrl, NVME_REG_CSTS);
 
-    KprintfT("[nvme] disable_ctrl(shutdown=%ld): CSTS_before=%08lx CC_before=%08lx\n",
-             (LONG)shutdown, csts_before, ctrl->ctrl_config);
+    KprintfT("[nvme] disable_ctrl: CSTS_before=%08lx CC_before=%08lx\n",
+             csts_before, ctrl->ctrl_config);
 #endif
 
     ctrl->ctrl_config &= ~(u32)NVME_CC_SHN_MASK;
-    if (shutdown)
-        ctrl->ctrl_config |= NVME_CC_SHN_NORMAL;
-    else
-        ctrl->ctrl_config &= ~(u32)NVME_CC_ENABLE;
+    ctrl->ctrl_config &= ~(u32)NVME_CC_ENABLE;
 
     KprintfT("[nvme] disable_ctrl: writing CC=%08lx\n", ctrl->ctrl_config);
     nvme_reg_write32(ctrl, NVME_REG_CC, ctrl->ctrl_config);
 
-    if (shutdown)
-    {
-        return nvme_wait_ready(ctrl, NVME_CSTS_SHST_MASK,
-                               NVME_CSTS_SHST_CMPLT,
-                               ctrl->shutdown_timeout, "shutdown");
-    }
     if (ctrl->quirks & NVME_QUIRK_DELAY_BEFORE_CHK_RDY)
         delay_ms(NVME_QUIRK_DELAY_AMOUNT);
     return nvme_wait_ready(ctrl, NVME_CSTS_RDY, 0,
@@ -493,7 +509,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
     }
 
     KprintfT("[nvme] %s: calling nvme_disable_ctrl (CC.EN=0, wait RDY=0)\n", __func__);
-    if (nvme_disable_ctrl(ctrl, FALSE) != 0)
+    if (nvme_disable_ctrl(ctrl) != 0)
     {
         Kprintf("[nvme] %s: nvme_disable_ctrl failed\n", __func__);
         ret = ERR_CONTROLLER_ERROR;
@@ -568,7 +584,7 @@ static s32 nvme_probe_controller(struct NVMeController *ctrl)
     return ERR_NO_ERROR;
 
 fail_enable:
-    nvme_disable_ctrl(ctrl, FALSE);
+    nvme_disable_ctrl(ctrl);
 fail_admin:
     nvme_teardown_queue(&ctrl->admin_q);
 fail_int:
@@ -587,7 +603,7 @@ fail_pool:
     DeletePool(ctrl->metaPool);
     ctrl->metaPool = NULL;
 fail_hw:
-    hw_shutdown(ctrl);
+    hw_release(ctrl);
     return ret;
 }
 
@@ -715,39 +731,63 @@ s32 nvme_probe_all(struct NVMeDevice *base)
 }
 
 /*
- * nvme_ctrl_reset_quiesce - minimal pre-reset shutdown: the CC.SHN=NORMAL
- * handshake only.  Interrupt-safe (MMIO + busy-poll; reset_guard prepare
- * contract).
+ * nvme_ctrl_reset_shutdown - the deferred Ctrl-Amiga-Amiga shutdown.
  *
- * Shutdown processing makes the controller finish or abort outstanding
- * commands, flush its caches, and cease all host-memory access (HMB
- * included) once CSTS.SHST reads complete.
+ * Runs on AdminWorker once the unit task has seen the filesystems' last
+ * I/O (nvme_reset_warn_tick).  The Host Memory Buffer goes first: a
+ * controller still holding one can take seconds over CC.SHN (1.46 s on a
+ * Realtek RTS5765, 26 ms once released).  The controller then leaves LIVE,
+ * so I/O that still arrives fails at once instead of waiting on a drive
+ * that no longer answers, and the watchdog flushes rather than resets.
  */
-static void nvme_ctrl_reset_quiesce(struct NVMeController *ctrl)
+void nvme_ctrl_reset_shutdown(struct NVMeController *ctrl)
 {
-    if (ctrl->bar0)
-        nvme_disable_ctrl(ctrl, TRUE); /* CC.SHN=normal */
+    if (!ctrl->bar0)
+        return;
+
+    nvme_disable_host_mem(ctrl);
+    nvme_change_ctrl_state(ctrl, NVME_CTRL_DELETING);
+    if (nvme_shutdown_ctrl(ctrl, NVME_RESET_SHUTDOWN_S) == 0)
+        Kprintf("[nvme] %s: controller shut down for the reset\n", __func__);
 }
 
 /*
- * nvme_reset_quiesce_all - quiesce every probed controller before a
- * machine reset so each SSD records a safe shutdown and ceases all
- * host-memory access (HMB included).
+ * nvme_reset_prepare_all - shut every probed controller down before a
+ * machine reset (the reset_guard ColdReboot path).
+ *
+ * @base:     the device
+ * @may_wait: the caller is a task that may wait (reset_guard_can_wait())
+ *
+ * A controller gets nvme_ctrl_reset_shutdown() when the caller may wait
+ * and is not that controller's unit task, whose sync admin command would
+ * wait on a completion only the unit task delivers.  Otherwise it gets the
+ * interrupt-safe CC.SHN handshake alone (MMIO + busy-poll): shutdown
+ * processing still makes the controller cease all host-memory access, HMB
+ * included, but a controller holding one may take seconds over it.  The
+ * wait is reset_guard's per-driver budget, not the drive's RTD3E: the
+ * reset comes regardless.
  */
-void nvme_reset_quiesce_all(struct NVMeDevice *base)
+void nvme_reset_prepare_all(struct NVMeDevice *base, BOOL may_wait)
 {
+    struct ExecBase *SysBase = base->sysBase;
+    struct Task *self = may_wait ? FindTask(NULL) : NULL;
+
     for (struct MinNode *node = base->controllers.mlh_Head; node->mln_Succ != NULL; node = node->mln_Succ)
     {
         struct NVMeController *ctrl = (struct NVMeController *)node;
-        nvme_ctrl_reset_quiesce(ctrl);
+
+        if (self != NULL && self != ctrl->unit_task)
+            nvme_ctrl_reset_shutdown(ctrl);
+        else if (ctrl->bar0)
+            nvme_shutdown_ctrl(ctrl, NVME_INLINE_SHUTDOWN_S);
     }
 }
 
 /*
- * nvme_ctrl_shutdown - quiesce a controller and run the NVMe shutdown
- * handshake (CC.SHN=NORMAL, wait CSTS.SHST complete).
+ * nvme_ctrl_stop - quiesce a controller for removal and run the NVMe
+ * shutdown handshake with the drive's own budget (RTD3E).
  */
-static void nvme_ctrl_shutdown(struct NVMeController *ctrl)
+static void nvme_ctrl_stop(struct NVMeController *ctrl)
 {
     /* Stop draining both ports before tearing the device down, then
      * force-complete every still-inflight request on both queues
@@ -763,10 +803,10 @@ static void nvme_ctrl_shutdown(struct NVMeController *ctrl)
          * Features with NVME_HOST_MEM_ENABLE=0 so the controller
          * stops DMA-ing into the buffer before we free its
          * pages.  Must happen while the admin queue is still
-         * functional, i.e. before nvme_disable_ctrl. */
+         * functional, i.e. before the shutdown. */
         nvme_free_host_mem(ctrl);
 
-        nvme_disable_ctrl(ctrl, TRUE); /* CC.SHN=normal */
+        nvme_shutdown_ctrl(ctrl, ctrl->shutdown_timeout);
     }
 }
 
@@ -795,7 +835,7 @@ void nvme_unprobe_all(struct NVMeDevice *base)
         KprintfT("[nvme] %s: tearing down ctrl %lx\n", __func__,
                  (ULONG)ctrl->pci_dev);
 
-        nvme_ctrl_shutdown(ctrl);
+        nvme_ctrl_stop(ctrl);
 
         if (ctrl->bar0)
         {
@@ -808,7 +848,7 @@ void nvme_unprobe_all(struct NVMeDevice *base)
          * the unit task delivers. */
         drv_task_join(SysBase, &ctrl->admin_task);
         drv_task_join(SysBase, &ctrl->unit_task);
-        hw_shutdown(ctrl);
+        hw_release(ctrl);
 
         if (ctrl->effects)
         {
@@ -893,7 +933,7 @@ void nvme_reset_controller(struct NVMeController *ctrl)
     nvme_flush_queue_inflight(&ctrl->io_q);
     nvme_flush_queue_inflight(&ctrl->admin_q);
 
-    if (nvme_disable_ctrl(ctrl, FALSE) != 0)
+    if (nvme_disable_ctrl(ctrl) != 0)
         Kprintf("[nvme] reset: disable_ctrl reports error (ignoring)\n");
 
     nvme_teardown_queue(&ctrl->io_q);

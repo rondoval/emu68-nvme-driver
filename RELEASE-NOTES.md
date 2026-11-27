@@ -17,6 +17,11 @@ Changes since v1.7.
 
 ## Bug fixes
 
+- **Ctrl-Amiga-Amiga resets at once again, and no longer loses what a filesystem was still
+  writing.** The drive was shut down the moment the reset began, before filesystems such as
+  PFS3 had written their pending data: those writes failed, and the keyboard waited its full
+  10 seconds before resetting. The drive is now shut down once they have finished, and the
+  shutdown itself, on C:Reboot too, takes a fraction of the time it did.
 - **Drives with a short command queue work,** such as the Kioxia BG4. Every drive was asked
   for a 256-entry queue, and one that allows fewer refused it and stayed unused; the queue
   now takes the drive's own limit. Contributed by mgerstma.
