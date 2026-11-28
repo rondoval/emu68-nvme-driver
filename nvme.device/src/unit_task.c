@@ -101,6 +101,7 @@ static void nvme_drain_msgport(struct NVMeController *ctrl)
     struct IOStdReq *io;
     while ((io = (struct IOStdReq *)GetMsg(ctrl->msgPort)))
     {
+        ctrl->io_activity++; /* nvme_reset_warn_tick: the filesystems are still flushing */
 #ifdef PROFILE
         if (ctrl->reply_stamp != 0)
         {
@@ -121,6 +122,63 @@ static void nvme_drain_msgport(struct NVMeController *ctrl)
     }
 
     nvme_sq_batch_end(&ctrl->io_q);
+}
+
+/* nvme_io_idle - nothing in flight, queued, parked or waiting on msgPort. */
+static BOOL nvme_io_idle(struct NVMeController *ctrl)
+{
+    return ctrl->io_q.inflight_count == 0 &&
+           _IsMinListEmpty(&ctrl->io_pending) &&
+           _IsMinListEmpty(&ctrl->ctx_stalled) &&
+           _IsMinListEmpty(&ctrl->retry_list) &&
+           IsMsgPortEmpty(ctrl->msgPort);
+}
+
+/*
+ * nvme_reset_warn_tick - drain one controller after Ctrl-Amiga-Amiga.
+ *
+ * Called on every unit-task tick.  Once the keyboard reset handler has set
+ * base->resetWarned (nvme_device_reset_defer), the filesystems on this
+ * controller still flush through it: PFS3, for one, writes its pending
+ * data, then CMD_UPDATE and TD_MOTOR, then reports done itself.  This task
+ * keeps serving them and asks AdminWorker to shut the controller down once
+ * its I/O has been idle for NVME_RESET_IDLE_MS, or NVME_RESET_DEADLINE_MS
+ * after the warning at the latest, which leaves the shutdown time inside
+ * the keyboard's 10 s.
+ */
+static void nvme_reset_warn_tick(struct NVMeController *ctrl)
+{
+    struct ExecBase *SysBase = ctrl->sysBase;
+    const u16 idle_ticks = NVME_RESET_IDLE_MS / UNIT_TASK_POLL_DELAY_MS;
+    const u16 deadline_ticks = NVME_RESET_DEADLINE_MS / UNIT_TASK_POLL_DELAY_MS;
+
+    if (!ctrl->device->resetWarned || ctrl->reset_phase == NVME_RESET_SHUTDOWN)
+        return;
+
+    if (ctrl->reset_phase == NVME_RESET_NONE)
+    {
+        ctrl->reset_phase = NVME_RESET_DRAINING;
+        ctrl->reset_ticks = 0;
+        ctrl->reset_idle_ticks = 0;
+        ctrl->reset_activity = ctrl->io_activity;
+        return;
+    }
+
+    ctrl->reset_ticks++;
+    if (ctrl->io_activity != ctrl->reset_activity || !nvme_io_idle(ctrl))
+        ctrl->reset_idle_ticks = 0;
+    else
+        ctrl->reset_idle_ticks++;
+    ctrl->reset_activity = ctrl->io_activity;
+
+    if (ctrl->reset_idle_ticks >= idle_ticks || ctrl->reset_ticks >= deadline_ticks)
+    {
+        Kprintf("[nvme] %s: %s after %lu ms, shutting down\n", __func__,
+                ctrl->reset_idle_ticks >= idle_ticks ? "idle" : "deadline",
+                (ULONG)ctrl->reset_ticks * UNIT_TASK_POLL_DELAY_MS);
+        ctrl->reset_phase = NVME_RESET_SHUTDOWN;
+        Signal(ctrl->admin_task, 1UL << ctrl->shutdown_signal);
+    }
 }
 
 /*
@@ -218,6 +276,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
             drv_timer_consume(&tick);
 
             nvme_tick_watchdog(ctrl);
+            nvme_reset_warn_tick(ctrl);
 #ifdef PROFILE
             if (++ctrl->perf_ticks >= 2000 / UNIT_TASK_POLL_DELAY_MS)
             {
@@ -254,7 +313,7 @@ void UnitTask(struct NVMeController *ctrl, struct Task *parent)
         while ((pio = (struct IOStdReq *)RemHead((struct List *)&ctrl->io_pending)))
         {
             pio->io_Error = IOERR_ABORTED;
-            ReplyMsg((struct Message *)pio);
+            nvme_reply(ctrl->device, pio);
         }
 
         /* Likewise for parked chunked contexts: nothing is in flight for

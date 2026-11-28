@@ -1,3 +1,52 @@
+# Release notes — nvme.device 1.8
+
+Changes since v1.7.
+
+---
+
+## New features
+
+- **Emu68 virtual drives.** A partition of type `0x76` (MBR) or Emu68's GPT type holds a whole
+  RDB disk, as on Emu68's SD card. Up to ten per namespace now appear as units of
+  `nvmevd.device`, and their partitions mount and boot from there with their own names;
+  HDToolBox can edit them (`SCSI_DEVICE_NAME=nvmevd.device`). On the namespace itself their
+  blocks are read-only, and while a namespace holds one, `nvmeadm` cannot Format, Sanitize or
+  delete a namespace. See "Virtual drives" in the README.
+
+---
+
+## Bug fixes
+
+- **Ctrl-Amiga-Amiga resets at once again, and no longer loses what a filesystem was still
+  writing.** The drive was shut down the moment the reset began, before filesystems such as
+  PFS3 had written their pending data: those writes failed, and the keyboard waited its full
+  10 seconds before resetting. The drive is now shut down once they have finished, and the
+  shutdown itself, on C:Reboot too, takes a fraction of the time it did.
+- **Drives with a short command queue work,** such as the Kioxia BG4. Every drive was asked
+  for a 256-entry queue, and one that allows fewer refused it and stayed unused; the queue
+  now takes the drive's own limit. Contributed by mgerstma.
+- **Namespaces with 4 KiB sectors report their real size.** Partitioning tools were shown
+  8 times (SCSI) or 64 times (trackdisk geometry) the capacity.
+- **One program could make a unit unusable.** Opening `nvme.device` with flag bit 0 set
+  (`TDF_ALLOW_NON_3_5`, for instance) made that unit refuse every request, from every program.
+- **A SCSI READ no longer writes.** A READ command sent with `scsi_Flags` left at 0 wrote the
+  caller's buffer to the drive; the command now decides the direction.
+- **Filesystems stored in a drive's RDB load in cases that failed before:** files with debug
+  information left in, some relocation formats, and drives with 1024- or 2048-byte blocks.
+  Such a partition used to get the filesystem from ROM instead, or none.
+- **A damaged RDB is no longer used:** its own checksum is checked now, like its other
+  blocks'.
+
+---
+
+## Build & tooling
+
+- The `mounter` submodule moves to its v1.2: virtual drives and the fixes above. Its BSD
+  licence notice is in the README, as binaries must carry it.
+- CMake takes the mounter's source list from the submodule (`mounter.cmake`).
+
+---
+
 # Release notes — nvme.device 1.7
 
 Changes since v1.6.

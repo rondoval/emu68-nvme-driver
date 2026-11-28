@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.14.0)
-project(emu68-nvme-driver VERSION 1.7)
+project(emu68-nvme-driver VERSION 1.8)
 
 string(TIMESTAMP CURRENT_DATE "(%d.%m.%Y)")
 if(EMU68_BUILD_STAMP)   # local-build marker from the stack's build.sh; empty in releases
@@ -7,7 +7,7 @@ if(EMU68_BUILD_STAMP)   # local-build marker from the stack's build.sh; empty in
 endif()
 set(VERSTRING "$VER: ${PROJECT_NAME} ${PROJECT_VERSION_MAJOR}.${PROJECT_VERSION_MINOR} ${CURRENT_DATE}")
 
-find_package(Emu68Common 2.0 REQUIRED)
+find_package(Emu68Common 2.6 REQUIRED) # 2.6: reset_guard_set_defer(), reset_guard_done()
 find_package(Emu68PCIe 2.3 REQUIRED) # 2.3: libraries/pci_irq.h
 
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)

@@ -27,11 +27,19 @@ s32 nvme_probe_all(struct NVMeDevice *base);
 void nvme_unprobe_all(struct NVMeDevice *base);
 
 /*
- * nvme_reset_quiesce_all - minimal pre-reset shutdown of every controller
- * (CC.SHN handshake only).  Interrupt-safe; called from the reset_guard
- * prepare callback.
+ * nvme_ctrl_reset_shutdown - the deferred Ctrl-Amiga-Amiga shutdown of one
+ * controller: Host Memory Buffer released, CC.SHN, late I/O failed.  Task
+ * context, on AdminWorker (it submits a sync admin command).
  */
-void nvme_reset_quiesce_all(struct NVMeDevice *base);
+void nvme_ctrl_reset_shutdown(struct NVMeController *ctrl);
+
+/*
+ * nvme_reset_prepare_all - shut every controller down before a machine reset
+ * (the reset_guard ColdReboot path).  With @may_wait, from the calling task,
+ * nvme_ctrl_reset_shutdown(); without it, or for a controller whose unit task
+ * is the caller, the interrupt-safe CC.SHN handshake alone.
+ */
+void nvme_reset_prepare_all(struct NVMeDevice *base, BOOL may_wait);
 
 /* ------------------------------------------------------------------ */
 /* Per-controller lifecycle                                            */

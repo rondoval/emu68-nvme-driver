@@ -16,8 +16,13 @@ struct NVMeController;
  *   before the memory pool is destroyed.  Disables HMB on the
  *   controller (Set Features bits=0) and releases all allocated
  *   chunks plus the descriptor table.
+ *
+ * nvme_disable_host_mem - Set Features bits=0 only: the controller stops
+ *   using the buffer, which stays allocated.  For the reset path, where
+ *   the machine is about to reset and nothing needs the memory back.
  */
 void nvme_setup_host_mem(struct NVMeController *ctrl);
 void nvme_free_host_mem(struct NVMeController *ctrl);
+void nvme_disable_host_mem(struct NVMeController *ctrl);
 
 #endif /* NVME_HMB_H */

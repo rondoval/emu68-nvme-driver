@@ -330,3 +330,19 @@ void nvme_free_host_mem(struct NVMeController *ctrl)
     (void)nvme_set_host_mem(ctrl, 0); /* clear NVME_HOST_MEM_ENABLE */
     hmb_chunks_free(ctrl);
 }
+
+/*
+ * nvme_disable_host_mem - stop the controller using the Host Memory Buffer
+ * and keep the buffer.  The reset path's half of nvme_free_host_mem: the
+ * machine resets next, so nothing needs the chunks back, and memory the
+ * controller might still reach (should the command fail) is never handed
+ * to anyone else.  A controller with its buffer released shuts down at
+ * once; with it, a Realtek RTS5765 took 1.46 s for CC.SHN.
+ */
+void nvme_disable_host_mem(struct NVMeController *ctrl)
+{
+    if (!ctrl || !ctrl->hmb_descs)
+        return;
+
+    (void)nvme_set_host_mem(ctrl, 0);
+}

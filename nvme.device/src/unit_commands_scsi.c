@@ -212,6 +212,11 @@ static void scsi_make_sense(struct SCSICmd *cmd, ULONG info, ULONG specific, BYT
         sense->asc = 0x20;
         sense->asq = 0x00;
         break;
+    case TDERR_WriteProt:
+        sense->senseKey = 0x07; /* data protect / write protected (a virtual drive's blocks) */
+        sense->asc = 0x27;
+        sense->asq = 0x00;
+        break;
     default:
         sense->senseKey = 0x00;
         sense->asc = 0x00;
@@ -1020,8 +1025,12 @@ BYTE handle_scsi_cmd(struct IOStdReq *io)
             break;
         }
 
+        /* The CDB says which way the data goes, as on a real target: a READ
+         * sent with scsi_Flags left at 0 (SCSIF_WRITE) must not write. */
+        const BOOL isRead = command[0] == SCSI_CMD_READ_6 || command[0] == SCSI_CMD_READ_10 ||
+                            command[0] == SCSI_CMD_READ_16;
         error = nvme_io_submit_rw(unit, io, lba, count,
-                                  (cmd->scsi_Flags & SCSIF_READ) ? nvme_cmd_read : nvme_cmd_write,
+                                  isRead ? nvme_cmd_read : nvme_cmd_write,
                                   cmd->scsi_Data);
         if (error != NVME_IO_ASYNC)
         {

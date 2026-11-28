@@ -245,6 +245,14 @@ enum nvme_ctrl_state
 	NVME_CTRL_DEAD,
 };
 
+/* Ctrl-Amiga-Amiga drain of one controller (ctrl->reset_phase). */
+enum nvme_reset_phase
+{
+	NVME_RESET_NONE,     /* no warning seen */
+	NVME_RESET_DRAINING, /* serving the filesystems' last I/O until idle */
+	NVME_RESET_SHUTDOWN, /* AdminWorker asked to shut the controller down */
+};
+
 enum nvme_ctrl_flags
 {
 	NVME_CTRL_ADMIN_Q_STOPPED = 0,
@@ -302,7 +310,15 @@ struct NVMeController
 	struct Task *admin_task; /* AdminWorker handling blocking admin operations. */
 	BYTE scan_signal; /* Signal bit requesting namespace rescan work. */
 	BYTE fw_act_signal; /* Signal bit requesting firmware-activation follow-up. */
+	BYTE shutdown_signal; /* Signal bit: AdminWorker shuts down for Ctrl-Amiga-Amiga. */
 	struct MsgPort *adminPort; /* Passthrough and admin-only request port. */
+
+	/* Ctrl-Amiga-Amiga drain (nvme_reset_warn_tick, unit task only). */
+	u8 reset_phase; /* enum nvme_reset_phase: none, draining, shutting down */
+	u16 reset_ticks; /* unit-task ticks since the warning was seen */
+	u16 reset_idle_ticks; /* consecutive ticks with no I/O */
+	u32 reset_activity; /* io_activity at the previous tick */
+	u32 io_activity; /* bumped for every request the unit task takes from msgPort */
 
 	/* Shared allocation state. */
 	struct dma_mem_ctx dma_ctx; /* Emu68 (DMA-reachable) RAM regions; backs dmaPool */
@@ -352,7 +368,7 @@ struct NVMeController
 	u32 vs; /* Raw VS register cached after controller enable. */
 	u32 ctrl_config; /* Shadow copy of the programmed CC register value. */
 	u16 cntlid; /* Controller identifier from Identify Controller. */
-	u16 sqsize; /* Maximum I/O SQ size exposed to queue setup. */
+	u16 sqsize; /* I/O queue depth, 0's based: NVME_IO_QUEUE_SIZE clamped to CAP.MQES, set by nvme_enable_ctrl(); both I/O queue setup paths allocate sqsize + 1 entries. */
 	u16 io_max_inflight; /* Max simultaneous in-flight I/O commands (>=1): io_q.depth-1, or 1 under NVME_QUIRK_QDEPTH_ONE. Cached by nvme_setup_io_queue; gates dispatch/back-pressure and caps chunk siblings. */
 	u32 max_transfer_bytes; /* Maximum payload size accepted for one I/O command. */
 	u32 max_hw_sectors; /* Hardware max transfer in 512-byte sectors. */

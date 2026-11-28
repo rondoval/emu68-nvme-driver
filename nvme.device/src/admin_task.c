@@ -35,6 +35,7 @@
 #include "nvme/nvme_ctrl.h"     /* struct NVMeController, NVME_CTRL_* flags */
 #include "nvme/nvme_fw.h"       /* nvme_fw_act_work */
 #include "nvme/nvme_passthru.h" /* nvme_passthru_process */
+#include "nvme/nvme_probe.h"    /* nvme_ctrl_reset_shutdown */
 #include "nvme/nvme_scan.h"     /* nvme_scan_namespaces */
 
 /* AdminWorker owns scan_signal and fw_act_signal; callers only need to
@@ -58,10 +59,55 @@ void nvme_queue_fw_act_work(struct NVMeController *ctrl)
 }
 
 /*
+ * admin_dispatch - run the work one Wait() wakeup of AdminWorker asked for.
+ *
+ * Scan and firmware-activation requests, passthrough messages, and the
+ * Ctrl-Amiga-Amiga shutdown, which the unit task asks for once the
+ * filesystems' last I/O is done (nvme_reset_warn_tick).
+ */
+static void admin_dispatch(struct NVMeController *ctrl, ULONG sigset)
+{
+    struct ExecBase *SysBase = ctrl->sysBase;
+
+    if (sigset & (1UL << ctrl->scan_signal))
+    {
+        SetSignal(0, 1UL << ctrl->scan_signal);
+        nvme_scan_namespaces(ctrl);
+    }
+
+    if (sigset & (1UL << ctrl->fw_act_signal))
+    {
+        SetSignal(0, 1UL << ctrl->fw_act_signal);
+        nvme_fw_act_work(ctrl);
+    }
+
+    if (sigset & (1UL << ctrl->adminPort->mp_SigBit))
+    {
+        /* Skip passthrough dispatch while the admin queue is quiesced
+         * (e.g. during controller reset).  Messages stay in the port;
+         * nvme_unquiesce_admin_queue re-signals us so we drain them
+         * on resume. */
+        if (!test_bit(NVME_CTRL_ADMIN_Q_STOPPED, &ctrl->flags))
+        {
+            struct IOStdReq *io;
+            while ((io = (struct IOStdReq *)GetMsg(ctrl->adminPort)))
+                nvme_passthru_process(ctrl, io);
+        }
+    }
+
+    if (sigset & (1UL << ctrl->shutdown_signal))
+    {
+        SetSignal(0, 1UL << ctrl->shutdown_signal);
+        nvme_ctrl_reset_shutdown(ctrl);
+        nvme_device_reset_ctrl_done(ctrl->device);
+    }
+}
+
+/*
  * AdminWorker - body of the per-controller admin task.
  *
- * Creates ctrl->adminPort via CreateMsgPort plus the scan + fw_act signal bits, then
- * runs a Wait() loop dispatching by signal mask.  Exits on CTRL_C from
+ * Creates ctrl->adminPort via CreateMsgPort plus the scan, fw_act and shutdown
+ * signal bits, then runs a Wait() loop dispatching by signal mask (admin_dispatch).  Exits on CTRL_C from
  * drv_task_join, clearing ctrl->admin_task so the joiner can poll.
  *
  * Spawned via drv_task_spawn(SysBase, ctrl, AdminWorker, ...) at probe time.
@@ -93,48 +139,33 @@ void AdminWorker(struct NVMeController *ctrl, struct Task *parent)
         goto free_scan_signal;
     }
 
+    ctrl->shutdown_signal = AllocSignal(-1);
+    if (ctrl->shutdown_signal == -1)
+    {
+        Kprintf("[nvme] %s: failed to allocate shutdown signal\n", __func__);
+        goto free_fw_act_signal;
+    }
+
     ctrl->admin_task = FindTask(NULL);
     Signal(parent, SIGBREAKF_CTRL_F);
 
     KprintfT("[nvme] %s: admin worker running (port=%lx)\n",
             __func__, (ULONG)ctrl->adminPort);
 
-    ULONG waitMask = (1UL << ctrl->adminPort->mp_SigBit) | (1UL << ctrl->scan_signal) | (1UL << ctrl->fw_act_signal) | SIGBREAKF_CTRL_C;
+    ULONG waitMask = (1UL << ctrl->adminPort->mp_SigBit) | (1UL << ctrl->scan_signal) |
+                     (1UL << ctrl->fw_act_signal) | (1UL << ctrl->shutdown_signal) | SIGBREAKF_CTRL_C;
     ULONG sigset;
 
     do
     {
         sigset = Wait(waitMask);
-
-        if (sigset & (1UL << ctrl->scan_signal))
-        {
-            SetSignal(0, 1UL << ctrl->scan_signal);
-            nvme_scan_namespaces(ctrl);
-        }
-
-        if (sigset & (1UL << ctrl->fw_act_signal))
-        {
-            SetSignal(0, 1UL << ctrl->fw_act_signal);
-            nvme_fw_act_work(ctrl);
-        }
-
-        if (sigset & (1UL << ctrl->adminPort->mp_SigBit))
-        {
-            /* Skip passthrough dispatch while the admin queue is quiesced
-             * (e.g. during controller reset).  Messages stay in the port;
-             * nvme_unquiesce_admin_queue re-signals us so we drain them
-             * on resume. */
-            if (!test_bit(NVME_CTRL_ADMIN_Q_STOPPED, &ctrl->flags))
-            {
-                struct IOStdReq *io;
-                while ((io = (struct IOStdReq *)GetMsg(ctrl->adminPort)))
-                    nvme_passthru_process(ctrl, io);
-            }
-        }
+        admin_dispatch(ctrl, sigset);
     } while ((sigset & SIGBREAKF_CTRL_C) == 0);
 
     Kprintf("[nvme] %s: admin worker stopping\n", __func__);
 
+    FreeSignal(ctrl->shutdown_signal);
+free_fw_act_signal:
     FreeSignal(ctrl->fw_act_signal);
 free_scan_signal:
     FreeSignal(ctrl->scan_signal);

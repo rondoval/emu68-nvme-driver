@@ -23,6 +23,7 @@
 #include "device.h"
 #include "nvme/nvme_probe.h"
 #include "mounter.h"
+#include "vdrive.h"
 
 /*
  * Running the device as a program must return -1 rather than jump into code, which means
@@ -41,6 +42,8 @@ extern const UBYTE endOfCode;
 
 static const char deviceName[] = DEVICE_NAME;
 static const char deviceIdString[] = DEVICE_IDSTRING;
+static const char vdName[] = VD_NAME;
+static const char vdIdString[] = VD_IDSTRING;
 
 #ifdef MOUNTER_LOG
 /* MOUNTER_LOG sink: route the mounter submodule's diagnostics (%l-normalized
@@ -227,61 +230,227 @@ static const struct MountFS exfatRecipe = {
 /* Mount every probed namespace: RDB partitions plus MBR/GPT/superfloppy
  * filesystems via the recipes above.  Uses the mounter's explicit
  * {count, unit...} list: unit numbers are contiguous 0..nextUnitNumber-1
- * right after nvme_probe_all() and may exceed the classic 0-7 scan range. */
+ * right after nvme_probe_all() and may exceed the classic 0-7 scan range.
+ *
+ * A virtual drive (MBR 0x76 or Emu68's GPT type) is not mounted on its
+ * namespace: each becomes a unit of nvmevd.device, made by the first one found
+ * (mounter/vdrive.h), and the RDB inside mounts there.  The namespaces are
+ * refreshed first, so their virtual drives are fenced before any filesystem
+ * starts. */
+/*
+ * nvme_reply - reply a finished client request.
+ *
+ * nvmevd.device's own requests go back to it (VDriveComplete), which completes
+ * the request behind each on the spot; they come back no other way, so every
+ * reply path calls this.  Every other request is ReplyMsg()ed.  Task context
+ * only (the unit task, or a client's BeginIO), never an interrupt.  The request
+ * is not touched afterwards.
+ */
+void nvme_reply(struct NVMeDevice *device, struct IOStdReq *io)
+{
+    if (!VDriveComplete(device->vd, (struct IORequest *)io))
+    {
+        struct ExecBase *SysBase = device->sysBase;
+        ReplyMsg((struct Message *)io);
+    }
+}
+
+/*
+ * devFindUnit - look up a unit by its global unit number.
+ *
+ * Forbid around the walk: AdminWorker may concurrently add (rescan discovered
+ * a new namespace) or remove (namespace went away) nodes via
+ * nvme_alloc_nvmeunit / nvme_ns_remove — both mutate base->units under their
+ * own Forbid.  No need to hold past the walk: extracting a pointer is safe
+ * because the unit struct outlives the list membership (deferred-free at
+ * controller expunge).
+ *
+ * Returns the unit, or NULL when there is no such unit number.
+ */
+static struct NVMeUnit *devFindUnit(struct NVMeDevice *base, LONG unitNumber)
+{
+    struct ExecBase *SysBase = base->sysBase;
+    struct NVMeUnit *unit = NULL;
+    Forbid();
+    for (struct MinNode *n = base->units.mlh_Head; n->mln_Succ != NULL; n = n->mln_Succ)
+    {
+        struct NVMeUnit *u = (struct NVMeUnit *)n;
+        if (u->unitNumber == unitNumber)
+        {
+            unit = u;
+            break;
+        }
+    }
+    Permit();
+    return unit;
+}
+
+/*
+ * devRefreshVirtualDrives - rescan every unit for virtual drives.
+ *
+ * VDriveRefresh() creates nvmevd.device on the first one and fences each
+ * drive's blocks on its namespace.  The nvmevd.device units to mount go to
+ * virtualUnits, which has room for VDRIVE_SLOTS per unit.
+ *
+ * Returns how many units it listed.
+ */
+static ULONG devRefreshVirtualDrives(struct NVMeDevice *base, ULONG count, ULONG *virtualUnits)
+{
+    const struct VDriveConfig config = {
+        .SysBase = base->sysBase,
+        .name = vdName,
+        .idString = vdIdString,
+        .version = DEVICE_VERSION,
+        .revision = DEVICE_REVISION,
+        .parentName = deviceName,
+    };
+    ULONG listed = 0;
+    for (ULONG i = 0; i < count; i++)
+    {
+        struct NVMeUnit *unit = devFindUnit(base, (LONG)i);
+        if (unit == NULL)
+            continue;
+        /* one past the highest online slot: a slot below it is offline only
+         * for a drive of 2^32 blocks or more, and mounts nothing */
+        ULONG slots = VDriveRefresh(&base->vd, &config, i, &unit->vdParent);
+        for (ULONG slot = 0; slot < slots; slot++)
+            virtualUnits[listed++] = VDRIVE_UNIT(i, slot);
+    }
+    return listed;
+}
+
+/*
+ * devMountPass - mount the partitions on some units of one device.
+ *
+ * name is the device, and the creator of the filesystem entries the pass
+ * adds; results gets each unit's outcome.  Namespaces and virtual drives
+ * both report DG_DIRECT_ACCESS and are disks of their own, so one unit's
+ * RDBFF_LAST says nothing about the next; extraFlags adds what one kind
+ * needs.
+ */
+static void devMountPass(struct ExecBase *SysBase, const char *name, const ULONG *units,
+                         LONG *results, ULONG count, ULONG extraFlags)
+{
+    const struct MountStruct ms = {
+        .deviceName = (const UBYTE *)name,
+        .units = units,
+        .unitCount = count,
+        .unitResults = results,
+        .creatorName = (const UBYTE *)name,
+        .configDev = NULL, /* no autoconfig board; pre-DOS, MountDrive() makes a fake
+                              one carrying the DiagArea and boot point that booting
+                              a node needs (mounter/bootpoint.S) */
+        .SysBase = SysBase,
+        .flags = MSF_NO_CD | MSF_IGNORE_LAST | extraFlags,
+        .fs = {
+            [MOUNTFS_FAT]   = &fatRecipe,
+            [MOUNTFS_NTFS]  = &ntfsRecipe,
+            [MOUNTFS_EXFAT] = &exfatRecipe,
+        },
+        .dmaAlign = DMA_ALIGN_MIN, /* recipe FS buffers go to Fast RAM; misaligned ones
+                                      take the driver's bounce path */
+    };
+
+    LONG mounted = MountDrive(&ms, NULL);
+    (void)mounted; /* only read by Kprintf when the debug backend is on */
+    Kprintf("[nvme] %s: %s: mounted %ld partition(s) on %lu unit(s)\n", __func__, name,
+            mounted, count);
+    for (ULONG i = 0; i < count; i++)
+        KprintfT("[nvme] %s: %s unit %lu: %ld\n", __func__, name, units[i], results[i]);
+}
+
+/*
+ * devMountUnits - mount every unit's partitions, then those of its virtual drives.
+ *
+ * Runs once, from _doInit's task.  The virtual drives are found first, so
+ * their blocks are fenced before any filesystem on a namespace starts.
+ */
 static void devMountUnits(struct NVMeDevice *base, struct ExecBase *SysBase)
 {
     ULONG count = base->nextUnitNumber;
     if (count == 0)
         return;
 
-    /* The mounter takes the unit list as pure input and reports per-unit results
-     * into a separate array, so the two are allocated apart. */
-    ULONG *units = AllocMem(count * sizeof(ULONG), MEMF_PUBLIC);
-    LONG *results = AllocMem(count * sizeof(LONG), MEMF_PUBLIC);
+    /* One block: the namespaces' unit numbers, room for every virtual unit they
+     * can have, then a result for each.  The mounter takes the unit numbers as
+     * pure input and reports into the results. */
+    ULONG size = count * (1 + VDRIVE_SLOTS);
+    ULONG bytes = size * (sizeof(ULONG) + sizeof(LONG));
+    ULONG *units = AllocMem(bytes, MEMF_PUBLIC);
+    if (units == NULL)
+        return;
+    LONG *results = (LONG *)(units + size);
 
-    if (units != NULL && results != NULL) {
-        for (ULONG i = 0; i < count; i++)
-            units[i] = i;
+    for (ULONG i = 0; i < count; i++)
+        units[i] = i;
+    ULONG virtualCount = devRefreshVirtualDrives(base, count, units + count);
 
-        struct MountStruct ms = {
-            .deviceName = (const UBYTE *)DEVICE_NAME,
-            .units = units,
-            .unitCount = count,
-            .unitResults = results,
-            .creatorName = (const UBYTE *)DEVICE_NAME,
-            .configDev = NULL, /* no autoconfig board; MountDrive() supplies a fake one
-                                  pre-DOS, carrying the DiagArea and boot point strap
-                                  needs to boot a node (mounter/bootpoint.c) */
-            .SysBase = SysBase,
-            /* namespaces report DG_DIRECT_ACCESS, and are independent disks, so one
-             * namespace's RDBFF_LAST says nothing about the next */
-            .flags = MSF_NO_CD | MSF_IGNORE_LAST,
-            .fs = {
-                [MOUNTFS_FAT]   = &fatRecipe,
-                [MOUNTFS_NTFS]  = &ntfsRecipe,
-                [MOUNTFS_EXFAT] = &exfatRecipe,
-            },
-            .dmaAlign = DMA_ALIGN_MIN, /* recipe FS buffers go to Fast RAM; misaligned ones
-                                          take the driver's bounce path */
-        };
+    devMountPass(SysBase, deviceName, units, results, count, 0);
+    /* a virtual drive holds one RDB disk, as on Emu68's SD card */
+    if (virtualCount > 0)
+        devMountPass(SysBase, vdName, units + count, results + count, virtualCount,
+                     MSF_NO_LEGACY);
 
-        LONG mounted = MountDrive(&ms, NULL);
-        (void)mounted; /* only read by Kprintf when the debug backend is on */
-        Kprintf("[nvme] %s: mounted %ld partition(s) on %lu unit(s)\n", __func__, mounted, count);
-        for (ULONG i = 0; i < count; i++)
-            KprintfT("[nvme] %s: unit %lu: %ld\n", __func__, i, results[i]);
-    }
-
-    if (results != NULL)
-        FreeMem(results, count * sizeof(LONG));
-    if (units != NULL)
-        FreeMem(units, count * sizeof(ULONG));
+    FreeMem(units, bytes);
 }
 
-/* reset_guard prepare callback (interrupt-safe). */
+/*
+ * nvme_device_reset_prepare - reset_guard prepare: the ColdReboot path only
+ * (the keyboard path is deferred, nvme_device_reset_defer).
+ *
+ * From an ordinary task, as C:Reboot calls it, each controller gets the
+ * keyboard path's shutdown, Host Memory Buffer released first.
+ * The release is an admin command submitted and waited for from the calling task,
+ * which nvme allows from any task but the unit task.  From an interrupt,
+ * inside Disable() or on a unit task, only the interrupt-safe CC.SHN handshake
+ * runs.
+ */
 static void nvme_device_reset_prepare(APTR user)
 {
-    nvme_reset_quiesce_all(user);
+    struct NVMeDevice *base = user;
+
+    nvme_reset_prepare_all(base, reset_guard_can_wait(&base->resetGuard));
+}
+
+/*
+ * nvme_device_reset_defer - reset_guard defer callback: Ctrl-Amiga-Amiga.
+ *
+ * Interrupt context, called from the keyboard reset handler.  Nothing is
+ * shut down here: the filesystems on our units still have to write their
+ * pending data, from their own tasks, after their own handlers ran.  The
+ * unit tasks see resetWarned on their next tick and drain
+ * (nvme_reset_warn_tick); the last controller to shut down reports done.
+ * With no controller there is nothing to wait for.
+ */
+static void nvme_device_reset_defer(APTR user)
+{
+    struct NVMeDevice *base = user;
+    UWORD controllers = 0;
+
+    for (struct MinNode *node = base->controllers.mlh_Head; node->mln_Succ != NULL; node = node->mln_Succ)
+        controllers++;
+    base->resetPendingCtrls = controllers;
+    base->resetWarned = 1;
+
+    if (controllers == 0)
+        reset_guard_done(&base->resetGuard);
+}
+
+/*
+ * nvme_device_reset_ctrl_done - one controller has shut down after the
+ * warning (AdminWorker); the last one tells keyboard.device we are done.
+ */
+void nvme_device_reset_ctrl_done(struct NVMeDevice *base)
+{
+    struct ExecBase *SysBase = base->sysBase;
+    BOOL last;
+
+    Forbid();
+    last = base->resetPendingCtrls > 0 && --base->resetPendingCtrls == 0;
+    Permit();
+
+    if (last)
+        reset_guard_done(&base->resetGuard);
 }
 
 APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), struct ExecBase *SysBase asm("a6"))
@@ -298,11 +467,16 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
     _NewMinList(&base->controllers);
     _NewMinList(&base->units);
     base->probed = FALSE;
+    base->vd = NULL;
     base->utilityBase = NULL;
     base->pcieBase = NULL;
 
-    if (!reset_guard_install(&base->resetGuard, SysBase, nvme_device_reset_prepare, base,
-                             (CONST_STRPTR) "nvme.device"))
+    base->resetWarned = 0;
+    base->resetPendingCtrls = 0;
+    if (reset_guard_install(&base->resetGuard, SysBase, nvme_device_reset_prepare, base,
+                            (CONST_STRPTR) "nvme.device"))
+        reset_guard_set_defer(&base->resetGuard, nvme_device_reset_defer);
+    else
         Kprintf("[nvme] %s: reset guard install failed\n", __func__);
 
     return base;
@@ -321,7 +495,7 @@ APTR initFunction(struct NVMeDevice *base asm("d0"), ULONG segList asm("a0"), st
 static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
                     ULONG flags asm("d1"), struct NVMeDevice *base asm("a6"))
 {
-    struct ExecBase *SysBase = base->sysBase;
+    (void)flags; /* no open flags are honoured; only the trace log reads them */
     KprintfT("[nvme] %s: opening unit %ld flags=0x%lx\n", __func__, unitNumber, flags);
 
     /* Probe once: enumerate all NVMe controllers and build the unit list */
@@ -334,27 +508,9 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
         return;
     }
 
-    /* Look up the pre-allocated unit by its global unit number.
-     * Forbid around the walk: AdminWorker may concurrently add (rescan
-     * discovered a new namespace) or remove (namespace went away) nodes
-     * via nvme_alloc_nvmeunit / nvme_ns_remove — both mutate base->units
-     * under their own Forbid.  No need to hold past the walk: extracting
-     * a pointer is safe because the unit struct outlives the list
-     * membership (deferred-free at controller expunge), and any
-     * subsequent state change is gated by NVME_UNIT_DEAD which UnitOpen
-     * re-checks. */
-    struct NVMeUnit *unit = NULL;
-    Forbid();
-    for (struct MinNode *n = base->units.mlh_Head; n->mln_Succ != NULL; n = n->mln_Succ)
-    {
-        struct NVMeUnit *u = (struct NVMeUnit *)n;
-        if (u->unitNumber == unitNumber)
-        {
-            unit = u;
-            break;
-        }
-    }
-    Permit();
+    /* The pre-allocated unit; any later state change is gated by
+     * NVME_UNIT_DEAD, which UnitOpen re-checks. */
+    struct NVMeUnit *unit = devFindUnit(base, unitNumber);
 
     if (unit == NULL)
     {
@@ -365,7 +521,7 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
     }
     KprintfT("[nvme] %s: found unit %ld, opening\n", __func__, unitNumber);
 
-    s32 result = UnitOpen(unit, unitNumber, (LONG)flags);
+    s32 result = UnitOpen(unit, unitNumber);
 
     if (result == ERR_NO_ERROR)
     {
@@ -387,6 +543,19 @@ static void openLib(struct IOStdReq *io asm("a1"), LONG unitNumber asm("d0"),
 static ULONG expungeLib(struct NVMeDevice *base asm("a6"))
 {
     struct ExecBase *SysBase = base->sysBase;
+
+    /* nvmevd.device holds open every namespace that had a virtual drive.  When
+     * nobody else does, it goes first, unless one of its own units is open.  Its
+     * CloseDevice calls come back through closeLib, which must not expunge from
+     * under this call. */
+    if (base->vd != NULL &&
+        base->device.dd_Library.lib_OpenCnt == VDriveHeldOpens(base->vd))
+    {
+        base->device.dd_Library.lib_Flags &= (UBYTE)~LIBF_DELEXP;
+        if (VDriveDestroy(base->vd))
+            base->vd = NULL;
+    }
+
     if (base->device.dd_Library.lib_OpenCnt > 0)
     {
         base->device.dd_Library.lib_Flags |= LIBF_DELEXP;

@@ -7,7 +7,8 @@
  * pulls it off and invokes nvme_passthru_process serially per request.
  *
  * Sequence:
- *   1. validate the user struct + opcode
+ *   1. validate the user struct + opcode; refuse what would destroy a
+ *      virtual drive's blocks
  *   2. bounce the data buffer if PiStorm DMA can't reach it
  *   3. assemble the nvme_command SQE from the user's CDW fields
  *   4. nvme_passthru_start  -> freeze the I/O queue if CSE bits set
@@ -47,6 +48,7 @@
 
 #include <exec/errors.h>
 #include <devices/nvme.h>
+#include <devices/trackdisk.h> /* TDERR_WriteProt */
 
 #include <nvme/nvme_ctrl.h>     /* struct NVMeController, nvme_ctrl_state, nvme_state_terminal */
 #include <nvme/nvme_identify.h> /* struct nvme_ns */
@@ -55,6 +57,30 @@
 #include <nvme/nvme_passthru.h>
 #include <nvme/nvme_queue.h> /* nvme_start_freeze, nvme_wait_freeze, nvme_unfreeze */
 #include <nvme/nvme_scan.h>
+#include <device.h>             /* struct NVMeDevice */
+#include <vdrive.h>             /* VDriveAnyFenced */
+
+/*
+ * nvme_destroys_data - TRUE for the admin commands that rewrite or delete a
+ * namespace: Format NVM, Sanitize, Namespace Management's delete.
+ *
+ * A virtual drive's blocks are read-only on its namespace, so these are refused
+ * while any namespace has one.  Creating, attaching or detaching a namespace
+ * changes no block and passes.
+ */
+static BOOL nvme_destroys_data(const struct NVMePassthruCmd *uc)
+{
+    switch (uc->pt_Opcode)
+    {
+    case nvme_admin_format_nvm:
+    case nvme_admin_sanitize_nvm:
+        return TRUE;
+    case nvme_admin_ns_mgmt:
+        return (uc->pt_Cdw10 & 0xf) == 1; /* CDW10 SEL: 1h = delete */
+    default:
+        return FALSE;
+    }
+}
 
 /*
  * nvme_command_effects - return the Effects Log entry for a given opcode.
@@ -178,6 +204,14 @@ void nvme_passthru_process(struct NVMeController *ctrl, struct IOStdReq *io)
     {
         Kprintf("[nvme] passthru: NSCMD_NVME_IO_PASS not yet supported\n");
         reply_passthru(SysBase, io, IOERR_NOCMD);
+        return;
+    }
+
+    if (nvme_destroys_data(uc) && VDriveAnyFenced(ctrl->device->vd))
+    {
+        Kprintf("[nvme] passthru: %s refused - a namespace holds virtual drives\n",
+                nvme_get_admin_opcode_str(uc->pt_Opcode));
+        reply_passthru(SysBase, io, TDERR_WriteProt);
         return;
     }
 

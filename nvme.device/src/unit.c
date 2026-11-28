@@ -23,16 +23,15 @@
  * open counters.  If probe failed for this controller, ctrl is
  * NULL and we refuse the open.
  */
-s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
+s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber)
 {
 #ifndef DEBUG
     (void)unitNumber; /* only referenced by debug logging */
 #endif
     struct NVMeController *ctrl = unit->ctrl;
 
-    KprintfT("[nvme] UnitOpen: unit=%lx unitNumber=%ld nsid=%lu flags=0x%lx ctrl=%lx\n",
-             (ULONG)unit, unitNumber, unit->nsid, flags,
-             (ULONG)ctrl);
+    KprintfT("[nvme] UnitOpen: unit=%lx unitNumber=%ld nsid=%lu ctrl=%lx\n",
+             (ULONG)unit, unitNumber, unit->nsid, (ULONG)ctrl);
 
     if (!ctrl)
     {
@@ -51,7 +50,6 @@ s32 UnitOpen(struct NVMeUnit *unit, LONG unitNumber, LONG flags)
         return ERR_CONTROLLER_ERROR;
     }
 
-    unit->flags = flags;
     unit->unit.unit_OpenCnt++;
     ctrl->openUnits++;
 

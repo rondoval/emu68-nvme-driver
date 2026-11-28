@@ -539,7 +539,7 @@ static void nvme_build_create_cq(struct NVMeController *ctrl, struct nvme_comman
     cmd->create_cq.opcode = nvme_admin_create_cq;
     cmd->create_cq.prp1 = le64((u64)(ULONG)ctrl->io_q.cq);
     cmd->create_cq.cqid = le16(NVME_IO_QID);
-    cmd->create_cq.qsize = le16(NVME_IO_QUEUE_SIZE - 1);
+    cmd->create_cq.qsize = le16((u16)(ctrl->io_q.depth - 1)); /* 0's based */
     cmd->create_cq.cq_flags = le16(NVME_QUEUE_PHYS_CONTIG | NVME_CQ_IRQ_ENABLED);
     cmd->create_cq.irq_vector = le16(0);
 }
@@ -558,7 +558,7 @@ static void nvme_build_create_sq(struct NVMeController *ctrl, struct nvme_comman
     cmd->create_sq.opcode = nvme_admin_create_sq;
     cmd->create_sq.prp1 = le64((u64)(ULONG)ctrl->io_q.sq);
     cmd->create_sq.sqid = le16(NVME_IO_QID);
-    cmd->create_sq.qsize = le16(NVME_IO_QUEUE_SIZE - 1);
+    cmd->create_sq.qsize = le16((u16)(ctrl->io_q.depth - 1)); /* 0's based */
     cmd->create_sq.sq_flags = le16(NVME_QUEUE_PHYS_CONTIG | sq_prio);
     cmd->create_sq.cqid = le16(NVME_IO_QID);
 }
@@ -615,8 +615,9 @@ s32 nvme_setup_io_queue(struct NVMeController *ctrl)
              __func__, num_queues & 0xFFFF, num_queues >> 16);
 #endif
 
-    /* Step 2: allocate rings + inflight table for the I/O queue. */
-    if (nvme_setup_queue(ctrl, &ctrl->io_q, NVME_IO_QID, NVME_IO_QUEUE_SIZE) != 0)
+    /* Step 2: allocate rings + inflight table for the I/O queue, at the
+     * depth nvme_enable_ctrl() derived from CAP.MQES (0's based sqsize). */
+    if (nvme_setup_queue(ctrl, &ctrl->io_q, NVME_IO_QID, (u16)(ctrl->sqsize + 1U)) != 0)
         return -1;
 
     /* Step 3a: Create I/O CQ. */
@@ -724,7 +725,7 @@ static void nvme_io_setup_async_features(struct nvme_request *req)
         return;
     }
 
-    if (nvme_setup_queue(ctrl, &ctrl->io_q, NVME_IO_QID, NVME_IO_QUEUE_SIZE) != 0)
+    if (nvme_setup_queue(ctrl, &ctrl->io_q, NVME_IO_QID, (u16)(ctrl->sqsize + 1U)) != 0)
     {
         Kprintf("[nvme] reset: I/O queue alloc failed\n");
         nvme_reset_finish(ctrl, FALSE);

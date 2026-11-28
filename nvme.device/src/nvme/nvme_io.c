@@ -24,6 +24,7 @@
 #endif
 
 #include <exec/errors.h>
+#include <devices/trackdisk.h> /* TDERR_WriteProt */
 #include <timing.h>
 
 #include <device.h>
@@ -31,6 +32,7 @@
 #include <nvme/nvme_completion.h>
 #include <nvme/nvme_io.h>
 #include <nvme/nvme_queue.h> /* nvme_inflight_claim, nvme_inflight_release */
+#include <vdrive.h>
 
 #define NVME_PRP_ENTRIES_PER_PAGE (NVME_CTRL_PAGE_SIZE / sizeof(u64)) /* 512 */
 
@@ -878,7 +880,7 @@ void nvme_io_context_finish(struct nvme_io_context *ctx)
     KprintfT("[nvme] ctx_finish: io=%lx err=%ld actual=%lu (ctx=%lx)\n",
              (ULONG)io, (LONG)err, (ULONG)io->io_Actual, (ULONG)ctx);
 
-    ReplyMsg((struct Message *)io);
+    nvme_reply(ctx->unit->device, io);
 #ifdef PROFILE
     ctrl->reply_stamp = get_time() | 1;
 #endif
@@ -905,10 +907,22 @@ void nvme_io_context_finish(struct nvme_io_context *ctx)
  * Validates its arguments before allocating any request: a zero-length
  * transfer returns IOERR_BADLENGTH; a NULL @buffer (a caller error, not a
  * zero-fill request) or an LBA range past the namespace returns
- * IOERR_BADADDRESS.
+ * IOERR_BADADDRESS, and a write into a virtual drive TDERR_WriteProt.
  *
  * Returns NVME_IO_ASYNC on success or IOERR_* on synchronous failure.
  */
+/*
+ * nvme_write_allowed - the write fence
+ *
+ * A virtual drive's blocks belong to nvmevd.device: on the namespace itself they
+ * are read-only to every client but that device (mounter/vdrive.h).
+ */
+static BOOL nvme_write_allowed(struct NVMeUnit *unit, struct IOStdReq *io, u64 lba, u64 blocks)
+{
+    return VDriveWriteAllowed(unit->vdParent, (struct IORequest *)io, lba << unit->blockShift,
+                              blocks << unit->blockShift);
+}
+
 BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
                        u64 lba, ULONG blocks, u8 opcode, void *buffer)
 {
@@ -941,6 +955,9 @@ BYTE nvme_io_submit_rw(struct NVMeUnit *unit, struct IOStdReq *io,
                  (ULONG)unit->logicalSectors);
         return IOERR_BADADDRESS;
     }
+
+    if (opcode == nvme_cmd_write && !nvme_write_allowed(unit, io, lba, blocks))
+        return TDERR_WriteProt;
 
     /* Single-shot fast path. */
     if (cap == 0 || bytes <= cap)
@@ -1036,7 +1053,7 @@ BYTE nvme_io_submit_flush(struct NVMeUnit *unit, struct IOStdReq *io)
  *
  * Like nvme_io_submit_rw, validates length and namespace bounds itself:
  * zero blocks → IOERR_BADLENGTH, an LBA range past the namespace →
- * IOERR_BADADDRESS.
+ * IOERR_BADADDRESS, a range in a virtual drive → TDERR_WriteProt.
  */
 BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
                                  u64 lba, ULONG blocks)
@@ -1056,6 +1073,9 @@ BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
                  (ULONG)unit->logicalSectors);
         return IOERR_BADADDRESS;
     }
+
+    if (!nvme_write_allowed(unit, io, lba, blocks))
+        return TDERR_WriteProt;
 
     if (ctrl->quirks & NVME_QUIRK_DEALLOCATE_ZEROES)
     {
@@ -1122,6 +1142,8 @@ BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
  * slots filled by the caller and slots [nr..MAX-1] left zero (the
  * dma_zalloc guarantee).
  *
+ * A range in a virtual drive refuses the whole request with TDERR_WriteProt.
+ *
  * Takes ownership of @ranges unconditionally: on NVME_IO_ASYNC the
  * completion path frees it; on any error return the function frees
  * it before returning.  Caller must not touch @ranges after this call.
@@ -1129,6 +1151,15 @@ BYTE nvme_io_submit_write_zeroes(struct NVMeUnit *unit, struct IOStdReq *io,
 BYTE nvme_io_submit_dsm(struct NVMeUnit *unit, struct IOStdReq *io,
                         struct nvme_dsm_range *ranges, u16 nr)
 {
+    for (u16 i = 0; i < nr; i++)
+    {
+        if (!nvme_write_allowed(unit, io, le64(ranges[i].slba), le32(ranges[i].nlb)))
+        {
+            dma_free(unit->ctrl->dmaPool, ranges);
+            return TDERR_WriteProt;
+        }
+    }
+
     BYTE err;
     struct nvme_request *req = nvme_req_alloc_io(unit, io, &err);
     if (!req)
