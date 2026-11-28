@@ -145,7 +145,9 @@ depends on where the driver lives:
 
 - **Built into a custom Kickstart ROM** — the driver initializes during cold start, before DOS.
   Partitions are registered as boot nodes, so the machine can boot from the NVMe drive, and
-  nothing else has to be set up.
+  nothing else has to be set up. Leave `gic400.library` and Emu68's other built-in modules
+  (`devicetree.resource`, `mailbox.resource`, `68040.library`, ...) out of the image: Emu68
+  supplies them from its own ROM, and a second copy of one does not help.
 - **Installed in `DEVS:`** — AmigaOS does not load a device driver from `DEVS:` on its own; it is
   loaded the first time something opens it. Until then the driver is not in memory and **no NVMe
   partition appears**, however correct the partition table is. Opening HDToolBox makes them show
